@@ -1,0 +1,149 @@
+<!-- מסך הבית: מגירה -->
+<section id="home" class="screen active">
+  <header class="bar">
+    <div class="brand">מחברת</div>
+    <button class="icon-btn" id="btn-settings" aria-label="הגדרות">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </header>
+  <div class="content">
+    <div id="setup-hint" class="notice hidden"></div>
+    <div class="section-title">
+      <span>המגירה</span>
+      <span id="drawer-count" class="muted"></span>
+    </div>
+    <div id="drawer-list" class="list"></div>
+    <div id="drawer-empty" class="empty hidden">המגירה ריקה. הקש על המיקרופון ודבר.</div>
+  </div>
+  <div class="fab-wrap">
+    <button id="btn-record" class="fab" aria-label="הקלטת הערה">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+    </button>
+  </div>
+</section>
+
+<!-- הקלטה -->
+<section id="recording" class="screen">
+  <div class="rec-wrap">
+    <div class="wave" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+    <div id="rec-status" class="muted">מקשיב…</div>
+    <div id="rec-text" class="rec-text"></div>
+    <textarea id="rec-input" class="text-area rec-input hidden" rows="7" placeholder="הקש על המיקרופון במקלדת ודבר…"></textarea>
+    <div class="row gap">
+      <button id="btn-rec-stop" class="btn primary big">סיום</button>
+      <button id="btn-rec-cancel" class="btn ghost">ביטול</button>
+    </div>
+  </div>
+</section>
+
+<!-- עיבוד -->
+<section id="processing" class="screen">
+  <div class="rec-wrap">
+    <div class="spinner" aria-hidden="true"></div>
+    <div class="serif big-text">Claude עורך את ההערה…</div>
+    <div id="proc-text" class="muted proc-text"></div>
+  </div>
+</section>
+
+<!-- טיוטה -->
+<section id="draft" class="screen">
+  <header class="bar">
+    <button class="icon-btn" id="btn-draft-back" aria-label="חזרה">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+    <div id="draft-status" class="bar-sub">נשמר במגירה</div>
+  </header>
+  <div class="content">
+    <label class="label" for="draft-dest">יעד</label>
+    <div class="card dest">
+      <select id="draft-kind" aria-label="סוג היעד">
+        <option value="source">תוספת לדף מקור</option>
+        <option value="idea">הערה חדשה בגינה</option>
+        <option value="course">תוספת לקורס</option>
+        <option value="inbox">לתיקיית זמני</option>
+      </select>
+      <input id="draft-dest" list="dest-options" placeholder="שם הספר / הקורס">
+      <datalist id="dest-options"></datalist>
+      <input id="draft-section" placeholder="פרק / חלק (לא חובה)">
+      <div id="draft-why" class="muted small"></div>
+    </div>
+
+    <label class="label" for="draft-title">כותרת</label>
+    <input id="draft-title" class="title-input">
+
+    <label class="label" for="draft-text">הנוסח הערוך</label>
+    <textarea id="draft-text" class="text-area" rows="8"></textarea>
+
+    <div class="label">תגיות</div>
+    <div id="draft-tags" class="chips"></div>
+    <div class="row gap">
+      <input id="tag-input" placeholder="תגית חדשה" aria-label="תגית חדשה">
+      <button id="btn-tag-add" class="btn ghost small-btn">הוספה</button>
+    </div>
+
+    <div class="label">קשרים</div>
+    <div id="draft-links" class="list"></div>
+
+    <details class="orig">
+      <summary>מה אמרת במקור</summary>
+      <div id="draft-transcript"></div>
+    </details>
+  </div>
+  <footer class="actions">
+    <button id="btn-approve" class="btn primary">אישור והכנסה לכספת</button>
+    <button id="btn-keep" class="btn ghost">השאר במגירה</button>
+    <button id="btn-delete" class="btn danger">מחיקה</button>
+  </footer>
+</section>
+
+<!-- הגדרות -->
+<section id="settings" class="screen">
+  <header class="bar">
+    <button class="icon-btn" id="btn-settings-back" aria-label="חזרה">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+    <div class="bar-sub">הגדרות</div>
+  </header>
+  <div class="content">
+    <div class="label">הכספת</div>
+    <div class="card">
+      <div id="vault-name" class="serif">לא נבחרה תיקייה</div>
+      <div class="muted small">בחר את תיקיית הכספת של אובסידיאן (למשל Documents/מחברת)</div>
+      <button id="btn-pick-vault" class="btn ghost">בחירת תיקייה</button>
+    </div>
+
+    <label class="label" for="api-key">מפתח API של Anthropic</label>
+    <div class="card">
+      <input id="api-key" type="password" placeholder="sk-ant-…" autocomplete="off">
+      <div class="muted small">נשמר רק בטלפון הזה.</div>
+      <div class="row gap">
+        <button id="btn-save-key" class="btn primary">שמירה</button>
+        <button id="btn-test-key" class="btn ghost">בדיקה</button>
+      </div>
+      <div id="key-status" class="muted small"></div>
+    </div>
+
+    <label class="label" for="model">מודל לעריכה</label>
+    <select id="model" class="card-select">
+      <option value="claude-sonnet-5-5">Claude Sonnet (מומלץ)</option>
+      <option value="claude-opus-5-5">Claude Opus (איכותי יותר, יקר יותר)</option>
+      <option value="claude-haiku-5-5">Claude Haiku (מהיר וזול)</option>
+    </select>
+
+    <label class="label" for="speech-mode">איך להקליט</label>
+    <select id="speech-mode" class="card-select">
+      <option value="keyboard">דרך המיקרופון של המקלדת (מומלץ)</option>
+      <option value="popup">חלון ההכתבה של גוגל</option>
+      <option value="engine">מנוע מובנה (תמלול חי)</option>
+    </select>
+    <div class="muted small">המקלדת משתמשת במנוע שכבר עובד לך טוב בעברית.</div>
+
+    <div class="label">התיקיות בכספת</div>
+    <div class="card small">
+      <div>מקורות: <b>מקורות</b> · מחשבות: <b>הגינה</b> · קורסים: <b>קורסים</b> · קליטה: <b>זמני</b> · שערים: <b>שערים</b></div>
+    </div>
+    <div class="muted small center" id="version"></div>
+  </div>
+</section>
+
+<div id="toast" class="toast hidden" role="status"></div>
