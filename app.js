@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-14.1';
+const WEB_VERSION = '2026-11-14.2';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -11,6 +11,7 @@ const Kbd = Cap.registerPlugin('Keyboard');
 
 const FOLDERS = { source: 'מקורות', idea: 'הגינה', course: 'קורסים', inbox: 'זמני', gate: 'שערים' };
 const DRAWER = '_מחברת/מגירה';
+const LOG = '_מחברת/יומן';
 const STATUS_TAGS = ['לפיתוח', 'לבדוק-מקור', 'לשאלה'];
 
 const state = {
@@ -170,8 +171,31 @@ function destLabel(p) {
 }
 
 async function refreshWidget() {
-  const last = state.drafts[0]?.proposal?.title || '';
-  try { await Vault.setWidgetInfo({ count: state.drafts.length, last }); } catch { }
+  const log = state.log || [];
+  const last = log[0]?.title || '';
+  try { await Vault.setWidgetInfo({ count: log.length, last }); } catch { }
+}
+
+/* ---------- יומן: מה נכנס לכספת השבוע (בשביל הסקירה השבועית) ---------- */
+async function writeLog(d, path) {
+  const p = d.proposal;
+  const entry = { id: d.id, created: d.created, inserted: new Date().toISOString(), path, kind: p.kind, target: p.target, section: p.section,
+    title: p.title, text: p.text, tags: p.tags, links: p.links.filter(l => l.accepted).map(l => ({ title: l.title, reason: l.reason })),
+    suggested: p.links.filter(l => !l.accepted).map(l => ({ title: l.title, reason: l.reason })), newTag: p.newTag, why: p.why, transcript: d.transcript, reviewed: false };
+  await writeNote(`${LOG}/${d.id}.md`, `---\nmachberet: ${JSON.stringify(entry)}\n---\n`);
+}
+async function loadLog(days = 7) {
+  const files = await listNotes(LOG);
+  const since = Date.now() - days * 864e5;
+  const out = [];
+  for (const f of files) {
+    if (f.modified && f.modified < since) continue;
+    const c = await readNote(f.path); const e = c && fileToDraft(c);
+    if (e && new Date(e.inserted).getTime() >= since) out.push(e);
+  }
+  out.sort((a, b) => (b.inserted || '').localeCompare(a.inserted || ''));
+  state.log = out;
+  return out;
 }
 
 async function renderHome() {
@@ -182,11 +206,12 @@ async function renderHome() {
     hint.innerHTML = !ready ? 'כדי להתחיל, בחר את תיקיית הכספת בהגדרות.' : 'כדי שהעריכה תעבוד, הדבק את מפתח ה-API בהגדרות.';
     hint.onclick = openSettings;
   } else hint.classList.add('hidden');
-  if (ready) await loadDrafts(); else state.drafts = [];
+  if (ready) { await loadDrafts(); await loadLog().catch(() => { state.log = []; }); } else { state.drafts = []; state.log = []; }
   const list = $('drawer-list');
   list.innerHTML = '';
-  $('drawer-count').textContent = state.drafts.length ? `${state.drafts.length} ממתינות` : '';
-  $('drawer-empty').classList.toggle('hidden', state.drafts.length > 0);
+  const n = state.log.length;
+  $('drawer-count').textContent = n ? (n === 1 ? 'הערה אחת השבוע' : `${n} הערות השבוע`) : '';
+  $('drawer-empty').classList.toggle('hidden', state.drafts.length + n > 0);
   for (const d of state.drafts) {
     const b = document.createElement('button');
     b.className = 'draft-card' + (d.error ? ' err' : '');
@@ -195,6 +220,15 @@ async function renderHome() {
       <div class="t">${esc(d.proposal?.title || 'הערה ללא כותרת')}</div>
       <div class="ex">${esc(d.proposal?.text || d.transcript)}</div>`;
     b.onclick = () => openDraft(d);
+    list.appendChild(b);
+  }
+  for (const e of state.log) {
+    const b = document.createElement('button');
+    b.className = 'draft-card';
+    b.innerHTML = `<div class="dest-line">נכנס ל${esc(e.path.replace(/\.md$/, '').replace('/', ' ← '))} · ${heDate(new Date(e.inserted))}</div>
+      <div class="t">${esc(e.title || 'הערה')}</div>
+      <div class="ex">${esc(e.text)}</div>`;
+    b.onclick = () => openObsidian(e.path);
     list.appendChild(b);
   }
   refreshWidget();
@@ -325,7 +359,7 @@ async function processTranscript(transcript) {
   try { await saveDraft(d); }
   catch (e) { toast('לא הצלחתי לשמור: ' + e.message, 5000); show('home'); return; }
   state.drafts.unshift(d);
-  toast('נשמר ✓', 1800);
+  toast('נשמר ✓ — ייכנס לכספת בעוד רגע', 2200);
   await renderHome().catch(() => { });
   show('home');
   if (state.fromWidget) { state.fromWidget = false; setTimeout(() => { try { AppP.minimizeApp(); } catch { } }, 700); }
@@ -344,8 +378,14 @@ async function processPending() {
     const map = await buildVaultMap();
     for (const d of pending) {
       try { d.proposal = await callClaude(d.transcript, map); d.error = null; }
-      catch (e) { d.error = e.message; }
-      await saveDraft(d).catch(() => { });
+      catch (e) { d.error = e.message; await saveDraft(d).catch(() => { }); continue; }
+      // נכנס לכספת מיד — בלי אישור. הסקירה השבועית תאפשר לתקן בדיעבד.
+      try {
+        if ((d.proposal.kind === 'source' || d.proposal.kind === 'course') && !d.proposal.target) d.proposal.kind = 'inbox';
+        const path = await approve(d);
+        await writeLog(d, path);
+        await deleteDraft(d);
+      } catch (e) { d.error = 'כתיבה לכספת: ' + e.message; await saveDraft(d).catch(() => { }); }
     }
     if (document.querySelector('.screen.active')?.id === 'home') await renderHome();
     else { await loadDrafts(); refreshWidget(); }
