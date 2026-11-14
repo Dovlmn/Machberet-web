@@ -139,3 +139,4 @@ input, select, textarea { border: 0; border-radius: 4px; }
 .orig summary, #draft-transcript { color: var(--canvas-muted); }
 .orig { border-top-color: rgba(255,255,255,.25); }
 #version { color: var(--canvas-muted); }
+.draft-card .why { font-size: 12.5px; color: var(--muted); margin-top: 2px; }

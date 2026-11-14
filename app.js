@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-14.3';
+const WEB_VERSION = '2026-11-14.4';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -84,7 +84,7 @@ const SYSTEM_PROMPT = `אתה העורך של הערות קוליות שהמשת
 - "source": ההערה עוסקת בספר או במאמר מסוים. target = שם דף המקור הקיים מהרשימה אם מתאים (בדיוק כפי שהוא), אחרת שם הספר כפי שנאמר. section = פרק/חלק אם הוזכר (למשל "פרק ז׳"), התאם לכותרות קיימות בדף אם יש.
 - "course": רק אם המשתמש הזכיר במפורש קורס/סמינריון/שיעור מהרשימה. target = שם הקורס בדיוק. section ריק.
 - "idea": מחשבה עצמאית שאינה הערה על מקור מסוים. title = המחשבה עצמה כמשפט קצר. target ריק.
-- "inbox": אם לא ברור.
+- "inbox": רק אם באמת לא ברור לאיזה מקור או קורס ההערה שייכת. אם המשתמש הזכיר בתחילת ההקלטה שם של ספר, מאמר או קורס מהרשימה (גם בקיצור, למשל מילה ראשונה מהשם) — זו הוראה מפורשת, והיעד הוא אותו מקור.
 - why: משפט קצר אחד שמסביר למה נבחר היעד (למשל: אמרת "בתניא פרק ז׳").
 
 כותרת (title): חובה תמיד, גם בהערה קצרה. 2–7 מילים שמנסחות את עיקר ההערה. בהערת "idea" — המחשבה עצמה כמשפט.
@@ -98,7 +98,32 @@ const SYSTEM_PROMPT = `אתה העורך של הערות קוליות שהמשת
 החזר JSON בלבד, ללא טקסט נוסף, במבנה:
 {"kind":"source|idea|course|inbox","target":"","section":"","title":"","text":"","tags":[],"newTag":"","links":[{"title":"","reason":"","requested":false}],"why":""}`;
 
+/** שם ספר/קורס שנאמר בתחילת ההקלטה הוא הוראה מפורשת — מזהים אותו בקוד, לא משאירים לניחוש. */
+function detectExplicitTarget(transcript, map) {
+  const norm = (x) => String(x || '').replace(/[״"׳'.,:;!?\-–—()]/g, ' ').replace(/\s+/g, ' ').trim();
+  const head = ' ' + norm(transcript).split(' ').slice(0, 8).join(' ') + ' ';
+  const cands = [
+    ...map.sources.map(x => ({ kind: 'source', title: x.title })),
+    ...map.courses.map(x => ({ kind: 'course', title: x.title })),
+  ];
+  let best = null;
+  for (const c of cands) {
+    const t = norm(c.title);
+    const words = t.split(' ').filter(w => w.length >= 3);
+    // התאמה לשם המלא, או למילה הראשונה המשמעותית בשם (למשל "קייסמנט")
+    const keys = [t, words[0], words.slice(0, 2).join(' ')].filter(k => k && k.length >= 3);
+    for (const k of keys) {
+      const variants = [k, 'ב' + k, 'ה' + k, 'ל' + k];
+      if (variants.some(v => head.includes(' ' + v + ' '))) {
+        if (!best || k.length > best.len) best = { ...c, len: k.length };
+      }
+    }
+  }
+  return best;
+}
+
 async function callClaude(transcript, map) {
+  const explicit = detectExplicitTarget(transcript, map);
   if (!state.apiKey) throw new Error('חסר מפתח API — הוסף אותו בהגדרות');
   const user = `רשימות הכספת:
 דפי מקורות (וכותרות בתוכם): ${JSON.stringify(map.sources)}
@@ -108,7 +133,7 @@ async function callClaude(transcript, map) {
 הערות אחרות: ${JSON.stringify(map.other.slice(0, 100))}
 תגיות קיימות: ${JSON.stringify(map.tags)}
 תאריך היום: ${heDate()}
-
+${explicit ? `\nהוראה מפורשת: המשתמש פתח את ההקלטה בשם "${explicit.title}". היעד הוא kind="${explicit.kind}" ו-target="${explicit.title}" — גם אם ההערה קצרה או נראית כבדיקה. הסר את שם המקור מתחילת הטקסט הערוך.\n` : ''}
 התמלול:
 """
 ${transcript}
@@ -133,6 +158,7 @@ ${transcript}
   const m = txt.match(/\{[\s\S]*\}/);
   if (!m) throw new Error('Claude לא החזיר תשובה במבנה הצפוי');
   const p = JSON.parse(m[0]);
+  if (explicit) { p.kind = explicit.kind; p.target = explicit.title; if (!p.why || /לא ברור/.test(p.why)) p.why = `אמרת "${explicit.title.split(' ')[0]}" בתחילת ההקלטה`; }
   return {
     kind: ['source', 'idea', 'course', 'inbox'].includes(p.kind) ? p.kind : 'inbox',
     target: p.target || '', section: p.section || '', title: p.title || '', text: p.text || transcript,
@@ -227,7 +253,8 @@ async function renderHome() {
     b.className = 'draft-card';
     b.innerHTML = `<div class="dest-line">נכנס ל${esc(e.path.replace(/\.md$/, '').replace('/', ' ← '))} · ${heDate(new Date(e.inserted))}</div>
       <div class="t">${esc(e.title || 'הערה')}</div>
-      <div class="ex">${esc(e.text)}</div>`;
+      <div class="ex">${esc(e.text)}</div>
+      ${e.why ? `<div class="why">למה לשם: ${esc(e.why)}</div>` : ''}`;
     b.onclick = () => openObsidian(e.path);
     list.appendChild(b);
   }
