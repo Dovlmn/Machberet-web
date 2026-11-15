@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-15.2';
+const WEB_VERSION = '2026-11-15.3';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
