@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-15.1';
+const WEB_VERSION = '2026-11-15.2';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -206,6 +206,28 @@ async function migrateFromVault() {
   }
   try { await Vault.deleteFile({ path: '_מחברת' }); } catch { }
   await setPref('migrated1', 'yes');
+}
+
+/** תיקון חד-פעמי: הערות שהאפליקציה שמה בגינה בלי שביקשת — עוברות לזמני. רק כאלה שהאפליקציה עצמה כתבה (לפי היומן). */
+async function moveMisplacedIdeas() {
+  if ((await getPref('migrated2')) === 'yes') return 0;
+  const log = await readJSON('log');
+  let moved = 0;
+  for (const e of log) {
+    if (e.kind !== 'idea' || !e.path || !e.path.startsWith(FOLDERS.idea + '/')) continue;
+    if (/לגינה|לגן/.test(e.transcript || '')) continue;
+    const content = await readNote(e.path);
+    if (content == null) continue;
+    const name = e.path.split('/').pop().replace(/\.md$/i, '');
+    const dest = await uniquePath(FOLDERS.inbox, safeName(`${isoDate(new Date(e.created))} ${name}`));
+    await writeNote(dest, content);
+    await Vault.deleteFile({ path: e.path });
+    e.path = dest; e.kind = 'inbox';
+    moved++;
+  }
+  await writeJSON('log', log);
+  await setPref('migrated2', 'yes');
+  return moved;
 }
 
 function destLabel(p) {
@@ -681,7 +703,13 @@ async function init() {
   } catch (e) { showError('הגדרות', e); }
   try { const info = await withTimeout(AppP.getInfo(), 3000, 'גרסה'); $('version').textContent = 'גרסה ' + info.version + ' · ממשק ' + WEB_VERSION + ' (' + (window.MACHBERET_SOURCE || '') + ')'; } catch { }
   try { await withTimeout(setupSpeechListeners(), 4000, 'מיקרופון'); } catch (e) { showError('מיקרופון', e); }
-  try { if (await vaultReady()) await withTimeout(migrateFromVault(), 15000, 'העברה'); } catch { }
+  try {
+    if (await vaultReady()) {
+      await withTimeout(migrateFromVault(), 15000, 'העברה');
+      const n = await withTimeout(moveMisplacedIdeas(), 15000, 'העברה');
+      if (n) toast(n === 1 ? 'הערה אחת הועברה מהגינה לזמני' : `${n} הערות הועברו מהגינה לזמני`, 4000);
+    }
+  } catch { }
   try { await withTimeout(renderHome(), 8000, 'מסך הבית'); } catch (e) { showError('מסך הבית', e); }
   processPending();
   try { const l = await withTimeout(AppP.getLaunchUrl(), 3000, 'קישור'); if (l && l.url) handleUrl(l.url); } catch { }
