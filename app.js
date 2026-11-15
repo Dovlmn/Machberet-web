@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-15.7';
+const WEB_VERSION = '2026-11-15.8';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -934,6 +934,19 @@ function startNoteEdit() {
   setTimeout(() => $('note-text-in').focus(), 100);
 }
 
+async function deleteNote() {
+  if (!confirm('למחוק את ההערה? היא תימחק גם מהכספת באובסידיאן.')) return;
+  try {
+    await removeEntry(nt.e);
+    await dropLogEntry(nt.e);
+    toast('ההערה נמחקה');
+    nt.editing = false;
+    await renderHome(); show('home');
+  } catch (err) {
+    const w = $('note-warn'); w.classList.remove('hidden'); w.textContent = err.message;
+  }
+}
+
 async function saveNote() {
   const title = $('note-title-in').value.trim(), text = $('note-text-in').value.trim();
   if (!text) { toast('הנוסח ריק'); return; }
@@ -1198,6 +1211,7 @@ function wire() {
   $('btn-note-edit').onclick = startNoteEdit;
   $('btn-note-save').onclick = saveNote;
   $('btn-note-cancel').onclick = () => { nt.editing = false; renderNote(); };
+  $('btn-note-delete').onclick = deleteNote;
   $('btn-note-obsidian').onclick = () => openObsidian(nt.e.path);
   $('btn-review-back').onclick = async () => { await renderHome(); show('home'); };
   $('btn-review-done').onclick = finishReview;
