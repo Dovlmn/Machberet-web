@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-15.4';
+const WEB_VERSION = '2026-11-15.5';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -134,7 +134,7 @@ async function callClaude(transcript, map) {
 הערות אחרות: ${JSON.stringify(map.other.slice(0, 100))}
 תגיות קיימות: ${JSON.stringify(map.tags)}
 תאריך היום: ${heDate()}
-${explicit ? `\nהוראה מפורשת: המשתמש פתח את ההקלטה בשם "${explicit.title}". היעד הוא kind="${explicit.kind}" ו-target="${explicit.title}" — גם אם ההערה קצרה או נראית כבדיקה. הסר את שם המקור מתחילת הטקסט הערוך.\n` : ''}
+${await personalContext()}${explicit ? `\nהוראה מפורשת: המשתמש פתח את ההקלטה בשם "${explicit.title}". היעד הוא kind="${explicit.kind}" ו-target="${explicit.title}" — גם אם ההערה קצרה או נראית כבדיקה. הסר את שם המקור מתחילת הטקסט הערוך.\n` : ''}
 התמלול:
 """
 ${transcript}
@@ -608,6 +608,7 @@ async function openSettings() {
   $('api-key').value = state.apiKey;
   $('model').value = state.model;
   $('speech-mode').value = (await getPref('inputMode')) || 'keyboard';
+  renderDictionary();
   $('key-status').textContent = state.apiKey ? 'יש מפתח שמור' : '';
   show('settings');
 }
@@ -625,6 +626,106 @@ async function testKey() {
   } catch (e) { $('key-status').textContent = 'לא עובד: ' + e.message; }
 }
 
+
+
+/* ===================== למידה מתיקונים ===================== */
+const words = (t) => String(t || '').trim().split(/\s+/).filter(Boolean);
+const clean = (w) => w.replace(/^[״"׳'(\[«]+|[.,:;!?״"׳')\]»]+$/g, '');
+
+/** משווה מילה-מילה ומחלץ החלפות קצרות (1–3 מילים) — אלה כנראה טעויות תמלול חוזרות. */
+function extractSubs(a, b) {
+  const A = words(a), B = words(b), n = A.length, m = B.length;
+  if (!n || !m || n * m > 250000) return [];
+  const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+    L[i][j] = clean(A[i]) === clean(B[j]) ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const subs = []; let i = 0, j = 0, da = [], db = [];
+  const flush = () => {
+    if (da.length && db.length && da.length <= 3 && db.length <= 3) {
+      const w = da.map(clean).join(' '), r = db.map(clean).join(' ');
+      if (w && r && w !== r) subs.push([w, r]);
+    }
+    da = []; db = [];
+  };
+  while (i < n && j < m) {
+    if (clean(A[i]) === clean(B[j])) { flush(); i++; j++; }
+    else if (L[i + 1][j] >= L[i][j + 1]) da.push(A[i++]); else db.push(B[j++]);
+  }
+  while (i < n) da.push(A[i++]); while (j < m) db.push(B[j++]); flush();
+  return subs;
+}
+
+async function learnFromEdit(before, after) {
+  before = String(before || '').trim(); after = String(after || '').trim();
+  if (!before || !after || before === after) return;
+  const dict = await readJSON('dictionary');
+  for (const [w, r] of extractSubs(before, after)) {
+    const x = dict.find(d => d.wrong === w && d.right === r);
+    if (x) x.count++; else dict.push({ wrong: w, right: r, count: 1 });
+  }
+  await writeJSON('dictionary', dict.slice(-300));
+  const ex = await readJSON('styleExamples');
+  ex.push({ before: before.slice(0, 600), after: after.slice(0, 600), at: new Date().toISOString() });
+  await writeJSON('styleExamples', ex.slice(-8));
+}
+
+/** הנוסח הנוכחי של הערה בכספת (אחרי עריכה ידנית באובסידיאן), או null אם לא נמצאה במקומה. */
+async function currentText(e) {
+  const content = await readNote(e.path);
+  if (content == null) return null;
+  const strip = (body) => body.split('\n').filter(l => !/^ראו גם:/.test(l) && !/^(#[^\s#]+\s*)+$/.test(l.trim()) && !/^>/.test(l)).join('\n').trim();
+  if (e.kind === 'source' || e.kind === 'course') {
+    const lines = content.split('\n');
+    const idx = lines.findIndex(l => l.trim() === `### ${e.title}`);
+    if (idx === -1) return null;
+    let end = lines.length;
+    for (let i = idx + 1; i < lines.length; i++) if (/^#{1,3}\s/.test(lines[i])) { end = i; break; }
+    return strip(lines.slice(idx + 1, end).join('\n'));
+  }
+  let body = content.replace(/^---\n[\s\S]*?\n---\n?/, '');
+  body = body.replace(/^\s*#\s+.*\n/, '');
+  body = body.split(/\n##\s+קשרים/)[0];
+  return strip(body);
+}
+
+/** עובר על ההערות של החודשיים האחרונים: אם תיקנת באובסידיאן — לומד, ומעדכן את היומן לנוסח שלך. */
+async function scanObsidianEdits() {
+  const all = await readJSON('log');
+  let changed = 0;
+  for (const e of all) {
+    if (!e.path || !e.text) continue;
+    let cur;
+    try { cur = await currentText(e); } catch { cur = null; }
+    if (!cur || cur === e.text.trim()) continue;
+    await learnFromEdit(e.text, cur);
+    e.text = cur; changed++;
+  }
+  if (changed) await writeJSON('log', all);
+  await setPref('lastScan', String(Date.now()));
+  return changed;
+}
+
+async function personalContext() {
+  const dict = (await readJSON('dictionary')).filter(d => d.manual || d.count >= 2);
+  const ex = (await readJSON('styleExamples')).slice(-5);
+  let t = '';
+  if (dict.length) t += `\nמילון אישי — טעויות תמלול חוזרות אצל המשתמש (תקן תמיד):\n${dict.map(d => `"${d.wrong}" → "${d.right}"`).join('\n')}\n`;
+  if (ex.length) t += `\nדוגמאות לתיקונים שהמשתמש עשה בעריכות קודמות שלך — למד מהן את הסגנון שלו (מה הוא משנה, מוחק ומשאיר):\n${ex.map((x, i) => `${i + 1}. לפני: ${x.before}\n   אחרי: ${x.after}`).join('\n')}\n`;
+  return t;
+}
+
+async function renderDictionary() {
+  const box = $('dict-list'); if (!box) return;
+  const dict = await readJSON('dictionary');
+  const shown = dict.filter(d => d.manual || d.count >= 2);
+  box.innerHTML = shown.length ? '' : '<div class="muted small">עדיין אין. המילון יתמלא מהתיקונים שלך.</div>';
+  shown.forEach(d => {
+    const row = document.createElement('div'); row.className = 'dict-row';
+    row.innerHTML = `<span>${esc(d.wrong)} ← <b>${esc(d.right)}</b></span><button class="dict-del" aria-label="הסרה">×</button>`;
+    row.querySelector('button').onclick = async () => { await writeJSON('dictionary', (await readJSON('dictionary')).filter(x => !(x.wrong === d.wrong && x.right === d.right))); renderDictionary(); };
+    box.appendChild(row);
+  });
+}
 
 /* ===================== סקירה שבועית ===================== */
 const KIND_LABEL = { source: 'מקורות', course: 'קורסים', idea: 'הגינה', inbox: 'זמני' };
@@ -682,6 +783,7 @@ async function dropLogEntry(e) { await writeJSON('log', (await readJSON('log')).
 
 /** שינוי הערה: מוציאים אותה ממקומה ומכניסים מחדש (אותו יעד או יעד חדש). */
 async function rewriteEntry(e, changes) {
+  if (changes.text && changes.text !== e.text) await learnFromEdit(e.text, changes.text);
   await removeEntry(e);
   const ne = { ...e, ...changes };
   ne.path = await insertEntry(ne);
@@ -724,6 +826,7 @@ ${JSON.stringify(notes)}`;
 
 async function openReview() {
   if (!(await vaultReady())) { toast('קודם בחר את תיקיית הכספת בהגדרות'); return; }
+  try { const n = await scanObsidianEdits(); if (n) toast(n === 1 ? 'למדתי מתיקון אחד שעשית באובסידיאן' : `למדתי מ-${n} תיקונים שעשית באובסידיאן`, 3500); } catch { }
   rv.entries = (await loadLog(7)).filter(e => !e.reviewed);
   rv.analysis = null;
   $('review-range').textContent = weekRange();
@@ -895,6 +998,12 @@ function wire() {
   };
   $('btn-save-key').onclick = async () => { state.apiKey = $('api-key').value.trim(); await setPref('apiKey', state.apiKey); $('key-status').textContent = 'נשמר'; };
   $('btn-test-key').onclick = testKey;
+  $('btn-dict-add').onclick = async () => {
+    const w = $('dict-wrong').value.trim(), r = $('dict-right').value.trim();
+    if (!w || !r) return;
+    const dict = await readJSON('dictionary'); dict.push({ wrong: w, right: r, count: 99, manual: true });
+    await writeJSON('dictionary', dict); $('dict-wrong').value = ''; $('dict-right').value = ''; renderDictionary();
+  };
   $('speech-mode').onchange = async () => { await setPref('inputMode', $('speech-mode').value); };
   $('model').onchange = async () => { state.model = $('model').value; await setPref('model', state.model); };
 
