@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-15.5';
+const WEB_VERSION = '2026-11-15.6';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -291,12 +291,11 @@ async function renderHome() {
   }
   for (const e of state.log) {
     const b = document.createElement('button');
-    b.className = 'draft-card';
-    b.innerHTML = `<div class="dest-line">נכנס ל${esc(e.path.replace(/\.md$/, '').replace('/', ' ← '))} · ${heDate(new Date(e.inserted))}</div>
+    b.className = 'note-card';
+    b.innerHTML = `<div class="top"><span class="chip-dest ${e.kind}">${esc(shortDest(e))}</span><span class="when">${esc(whenText(e.inserted))}</span></div>
       <div class="t">${esc(e.title || 'הערה')}</div>
-      <div class="ex">${esc(e.text)}</div>
-      ${e.why ? `<div class="why">למה לשם: ${esc(e.why)}</div>` : ''}`;
-    b.onclick = () => openObsidian(e.path);
+      <div class="ex">${esc(e.text)}</div>`;
+    b.onclick = () => openNote(e);
     list.appendChild(b);
   }
   refreshWidget();
@@ -727,6 +726,79 @@ async function renderDictionary() {
   });
 }
 
+
+/* ===================== מסך קריאה ועריכה ===================== */
+function shortDest(e) {
+  if (e.kind === 'source' || e.kind === 'course') return e.target + (e.section ? ' ← ' + e.section : '');
+  return e.kind === 'idea' ? 'הגינה' : 'זמני';
+}
+function whenText(iso) {
+  const d = new Date(iso), now = new Date();
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(now) - day(d)) / 864e5);
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (diff === 0) return 'היום, ' + hm;
+  if (diff === 1) return 'אתמול, ' + hm;
+  return heDate(d);
+}
+const nt = { e: null, editable: true, editing: false };
+
+async function openNote(e) {
+  nt.e = e; nt.editing = false; nt.editable = true;
+  $('note-warn').classList.add('hidden');
+  try {
+    const cur = await currentText(e);
+    if (cur == null) { nt.editable = false; }
+    else if (cur !== (e.text || '').trim()) { await learnFromEdit(e.text, cur); e.text = cur; await updateLogEntry(e); }
+  } catch { nt.editable = false; }
+  renderNote();
+  show('note');
+}
+
+function renderNote() {
+  const e = nt.e;
+  const where = e.kind === 'source' ? `${e.target}${e.section ? ' ← ' + e.section : ''}` : e.kind === 'course' ? `קורס: ${e.target}` : e.kind === 'idea' ? 'הגינה' : 'זמני';
+  $('note-meta').textContent = `${where} · ${heDate(new Date(e.inserted))}`;
+  $('note-title').textContent = e.title || 'הערה';
+  $('note-text').textContent = e.text || '';
+  const links = e.links || [];
+  $('note-links').innerHTML = links.length ? 'ראו גם: ' + links.map(l => `<b>${esc(l.title)}</b>`).join(' · ') : '';
+  $('note-tags').innerHTML = (e.tags || []).map(t => `<span>#${esc(t)}</span>`).join('');
+  $('note-orig').textContent = e.transcript || '';
+  const ed = nt.editing;
+  $('note-title').classList.toggle('hidden', ed); $('note-text').classList.toggle('hidden', ed);
+  $('note-title-in').classList.toggle('hidden', !ed); $('note-text-in').classList.toggle('hidden', !ed);
+  $('note-actions').classList.toggle('hidden', !ed);
+  $('btn-note-edit').classList.toggle('hidden', ed);
+  if (!nt.editable) {
+    const w = $('note-warn'); w.classList.remove('hidden');
+    w.textContent = 'לא מצאתי את ההערה במקום שבו נשמרה — אולי הועברה או ששינית לה כותרת באובסידיאן. אפשר לערוך אותה שם.';
+  }
+}
+
+function startNoteEdit() {
+  if (!nt.editable) { toast('את ההערה הזאת אפשר לערוך רק באובסידיאן', 3500); return; }
+  nt.editing = true;
+  $('note-title-in').value = nt.e.title || '';
+  $('note-text-in').value = nt.e.text || '';
+  renderNote();
+  setTimeout(() => $('note-text-in').focus(), 100);
+}
+
+async function saveNote() {
+  const title = $('note-title-in').value.trim(), text = $('note-text-in').value.trim();
+  if (!text) { toast('הנוסח ריק'); return; }
+  if (title === nt.e.title && text === nt.e.text) { nt.editing = false; renderNote(); return; }
+  $('btn-note-save').disabled = true;
+  try {
+    nt.e = await rewriteEntry(nt.e, { title, text });
+    nt.editing = false; renderNote(); toast('נשמר בכספת');
+  } catch (err) {
+    const w = $('note-warn'); w.classList.remove('hidden'); w.textContent = err.message;
+  }
+  $('btn-note-save').disabled = false;
+}
+
 /* ===================== סקירה שבועית ===================== */
 const KIND_LABEL = { source: 'מקורות', course: 'קורסים', idea: 'הגינה', inbox: 'זמני' };
 const rv = { entries: [], analysis: null, busy: false };
@@ -964,6 +1036,11 @@ function wire() {
   $('btn-rec-cancel').onclick = () => stopRecording(true);
   $('btn-settings').onclick = openSettings;
   $('btn-review').onclick = openReview;
+  $('btn-note-back').onclick = async () => { await renderHome(); show('home'); };
+  $('btn-note-edit').onclick = startNoteEdit;
+  $('btn-note-save').onclick = saveNote;
+  $('btn-note-cancel').onclick = () => { nt.editing = false; renderNote(); };
+  $('btn-note-obsidian').onclick = () => openObsidian(nt.e.path);
   $('btn-review-back').onclick = async () => { await renderHome(); show('home'); };
   $('btn-review-done').onclick = finishReview;
   $('btn-settings-back').onclick = async () => { await renderHome(); show('home'); };
@@ -1015,6 +1092,7 @@ function wire() {
     if (active === 'home') return AppP.exitApp();
     if (active === 'draft') { await saveDraft(collectDraft()).catch(() => { }); }
     if (active === 'review') { await renderHome(); show('home'); return; }
+    if (active === 'note' && nt.editing) { nt.editing = false; renderNote(); return; }
     await renderHome(); show('home');
   });
   AppP.addListener('resume', () => { if (document.querySelector('.screen.active')?.id === 'home') renderHome(); processPending(); });

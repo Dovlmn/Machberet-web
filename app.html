@@ -101,6 +101,34 @@
 </section>
 
 <!-- הגדרות -->
+<section id="note" class="screen">
+  <header class="bar">
+    <button class="icon-btn" id="btn-note-back" aria-label="חזרה">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+    <div class="bar-sub"></div>
+    <button id="btn-note-edit" class="note-edit-btn">עריכה</button>
+  </header>
+  <div class="content note-page">
+    <div id="note-meta" class="note-meta"></div>
+    <h1 id="note-title" class="note-title"></h1>
+    <input id="note-title-in" class="note-title-in hidden" aria-label="כותרת">
+    <div id="note-text" class="note-text"></div>
+    <textarea id="note-text-in" class="note-text-in hidden" aria-label="נוסח"></textarea>
+    <div id="note-links" class="note-links"></div>
+    <div id="note-tags" class="note-tags"></div>
+    <div id="note-warn" class="rv-warn hidden"></div>
+    <div class="note-foot">
+      <details><summary>מה אמרת במקור</summary><div id="note-orig" class="note-orig"></div></details>
+      <button id="btn-note-obsidian" class="link-btn">פתיחה באובסידיאן</button>
+    </div>
+  </div>
+  <footer class="actions hidden" id="note-actions">
+    <button id="btn-note-save" class="btn primary">שמירה</button>
+    <button id="btn-note-cancel" class="btn ghost">ביטול</button>
+  </footer>
+</section>
+
 <section id="review" class="screen">
   <header class="bar">
     <button class="icon-btn" id="btn-review-back" aria-label="חזרה">
