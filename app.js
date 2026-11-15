@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-14.4';
+const WEB_VERSION = '2026-11-15.1';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -83,8 +83,9 @@ const SYSTEM_PROMPT = `אתה העורך של הערות קוליות שהמשת
 קביעת יעד (kind):
 - "source": ההערה עוסקת בספר או במאמר מסוים. target = שם דף המקור הקיים מהרשימה אם מתאים (בדיוק כפי שהוא), אחרת שם הספר כפי שנאמר. section = פרק/חלק אם הוזכר (למשל "פרק ז׳"), התאם לכותרות קיימות בדף אם יש.
 - "course": רק אם המשתמש הזכיר במפורש קורס/סמינריון/שיעור מהרשימה. target = שם הקורס בדיוק. section ריק.
-- "idea": מחשבה עצמאית שאינה הערה על מקור מסוים. title = המחשבה עצמה כמשפט קצר. target ריק.
-- "inbox": רק אם באמת לא ברור לאיזה מקור או קורס ההערה שייכת. אם המשתמש הזכיר בתחילת ההקלטה שם של ספר, מאמר או קורס מהרשימה (גם בקיצור, למשל מילה ראשונה מהשם) — זו הוראה מפורשת, והיעד הוא אותו מקור.
+- "inbox" (תיקיית זמני): ברירת המחדל לכל הערה שאינה על מקור או קורס מסוים. כל מחשבה כללית נכנסת לכאן, ומשם המשתמש יעביר אותה בסקירה השבועית.
+- "idea" (הגינה): רק אם המשתמש אמר במפורש "לגינה", "זה רעיון לגינה" או דומה. title = המחשבה עצמה כמשפט קצר. target ריק.
+- אם המשתמש הזכיר בתחילת ההקלטה שם של ספר, מאמר או קורס מהרשימה (גם בקיצור, למשל מילה ראשונה מהשם) — זו הוראה מפורשת, והיעד הוא אותו מקור.
 - why: משפט קצר אחד שמסביר למה נבחר היעד (למשל: אמרת "בתניא פרק ז׳").
 
 כותרת (title): חובה תמיד, גם בהערה קצרה. 2–7 מילים שמנסחות את עיקר ההערה. בהערת "idea" — המחשבה עצמה כמשפט.
@@ -158,6 +159,7 @@ ${transcript}
   const m = txt.match(/\{[\s\S]*\}/);
   if (!m) throw new Error('Claude לא החזיר תשובה במבנה הצפוי');
   const p = JSON.parse(m[0]);
+  if (p.kind === 'idea' && !/לגינה|לגן|לתיקיית הגינה/.test(transcript)) p.kind = 'inbox';
   if (explicit) { p.kind = explicit.kind; p.target = explicit.title; if (!p.why || /לא ברור/.test(p.why)) p.why = `אמרת "${explicit.title.split(' ')[0]}" בתחילת ההקלטה`; }
   return {
     kind: ['source', 'idea', 'course', 'inbox'].includes(p.kind) ? p.kind : 'inbox',
@@ -169,24 +171,42 @@ ${transcript}
 }
 
 /* ---------- טיוטות במגירה (קבצים בכספת, כדי שיסתנכרנו) ---------- */
-function draftToFile(d) {
-  return `---\nmachberet: ${JSON.stringify(d)}\n---\n\n# ${d.proposal?.title || 'טיוטה'}\n\n${d.proposal?.text || d.transcript}\n`;
-}
+/* טיוטות ויומן נשמרים בתוך האפליקציה — לא בכספת, כדי לא להעמיס עליך קבצים פנימיים באובסידיאן */
 function fileToDraft(content) {
   const m = content.match(/^---\nmachberet: (.*)\n---/);
   if (!m) return null;
   try { return JSON.parse(m[1]); } catch { return null; }
 }
-async function saveDraft(d) { await writeNote(`${DRAWER}/${d.id}.md`, draftToFile(d)); }
+async function readJSON(key) { try { return JSON.parse((await getPref(key)) || '[]'); } catch { return []; } }
+async function writeJSON(key, v) { await setPref(key, JSON.stringify(v)); }
+async function saveDraft(d) {
+  const all = (await readJSON('drafts')).filter(x => x.id !== d.id);
+  all.push(d); await writeJSON('drafts', all);
+}
 async function loadDrafts() {
-  const files = await listNotes(DRAWER);
-  const out = [];
-  for (const f of files) { const c = await readNote(f.path); const d = c && fileToDraft(c); if (d) out.push(d); }
+  const out = await readJSON('drafts');
   out.sort((a, b) => (b.created || '').localeCompare(a.created || ''));
   state.drafts = out;
   return out;
 }
-async function deleteDraft(d) { await Vault.deleteFile({ path: `${DRAWER}/${d.id}.md` }); }
+async function deleteDraft(d) { await writeJSON('drafts', (await readJSON('drafts')).filter(x => x.id !== d.id)); }
+
+/** העברה חד-פעמית: קבצים פנימיים שנכתבו בעבר לתיקייה _מחברת בכספת עוברים לאפליקציה, והתיקייה נמחקת. */
+async function migrateFromVault() {
+  if ((await getPref('migrated1')) === 'yes') return;
+  for (const [folder, key] of [[DRAWER, 'drafts'], [LOG, 'log']]) {
+    const files = await listNotes(folder);
+    if (!files.length) continue;
+    const list = await readJSON(key);
+    for (const f of files) {
+      const c = await readNote(f.path); const e = c && fileToDraft(c);
+      if (e && !list.some(x => x.id === e.id)) list.push(e);
+    }
+    await writeJSON(key, list);
+  }
+  try { await Vault.deleteFile({ path: '_מחברת' }); } catch { }
+  await setPref('migrated1', 'yes');
+}
 
 function destLabel(p) {
   if (!p) return 'ממתין לעריכה';
@@ -208,17 +228,14 @@ async function writeLog(d, path) {
   const entry = { id: d.id, created: d.created, inserted: new Date().toISOString(), path, kind: p.kind, target: p.target, section: p.section,
     title: p.title, text: p.text, tags: p.tags, links: p.links.filter(l => l.accepted).map(l => ({ title: l.title, reason: l.reason })),
     suggested: p.links.filter(l => !l.accepted).map(l => ({ title: l.title, reason: l.reason })), newTag: p.newTag, why: p.why, transcript: d.transcript, reviewed: false };
-  await writeNote(`${LOG}/${d.id}.md`, `---\nmachberet: ${JSON.stringify(entry)}\n---\n`);
+  const cutoff = Date.now() - 60 * 864e5;
+  const all = (await readJSON('log')).filter(x => new Date(x.inserted).getTime() >= cutoff && x.id !== entry.id);
+  all.push(entry);
+  await writeJSON('log', all);
 }
 async function loadLog(days = 7) {
-  const files = await listNotes(LOG);
   const since = Date.now() - days * 864e5;
-  const out = [];
-  for (const f of files) {
-    if (f.modified && f.modified < since) continue;
-    const c = await readNote(f.path); const e = c && fileToDraft(c);
-    if (e && new Date(e.inserted).getTime() >= since) out.push(e);
-  }
+  const out = (await readJSON('log')).filter(e => new Date(e.inserted).getTime() >= since);
   out.sort((a, b) => (b.inserted || '').localeCompare(a.inserted || ''));
   state.log = out;
   return out;
@@ -664,6 +681,7 @@ async function init() {
   } catch (e) { showError('הגדרות', e); }
   try { const info = await withTimeout(AppP.getInfo(), 3000, 'גרסה'); $('version').textContent = 'גרסה ' + info.version + ' · ממשק ' + WEB_VERSION + ' (' + (window.MACHBERET_SOURCE || '') + ')'; } catch { }
   try { await withTimeout(setupSpeechListeners(), 4000, 'מיקרופון'); } catch (e) { showError('מיקרופון', e); }
+  try { if (await vaultReady()) await withTimeout(migrateFromVault(), 15000, 'העברה'); } catch { }
   try { await withTimeout(renderHome(), 8000, 'מסך הבית'); } catch (e) { showError('מסך הבית', e); }
   processPending();
   try { const l = await withTimeout(AppP.getLaunchUrl(), 3000, 'קישור'); if (l && l.url) handleUrl(l.url); } catch { }
