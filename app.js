@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-15.8';
+const WEB_VERSION = '2026-11-15.9';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -919,6 +919,7 @@ function renderNote() {
   $('note-title-in').classList.toggle('hidden', !ed); $('note-text-in').classList.toggle('hidden', !ed);
   $('note-actions').classList.toggle('hidden', !ed);
   $('btn-note-edit').classList.toggle('hidden', ed);
+  $('btn-note-delete').classList.toggle('hidden', ed);
   if (!nt.editable) {
     const w = $('note-warn'); w.classList.remove('hidden');
     w.textContent = 'לא מצאתי את ההערה במקום שבו נשמרה — אולי הועברה או ששינית לה כותרת באובסידיאן. אפשר לערוך אותה שם.';
