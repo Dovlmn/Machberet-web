@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-15.6';
+const WEB_VERSION = '2026-11-15.7';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -279,24 +279,41 @@ async function renderHome() {
   $('drawer-empty').classList.toggle('hidden', state.drafts.length + n > 0);
   const pendingReview = state.log.filter(e => !e.reviewed).length;
   $('review-sub').textContent = pendingReview ? (pendingReview === 1 ? 'הערה אחת מחכה לסקירה' : `${pendingReview} הערות מחכות לסקירה`) : 'הכול נסקר';
-  for (const d of state.drafts) {
+  const tab = state.tab || 'notes';
+  $('tab-notes').classList.toggle('on', tab === 'notes'); $('tab-tasks').classList.toggle('on', tab === 'tasks');
+  $('tab-notes').setAttribute('aria-selected', tab === 'notes'); $('tab-tasks').setAttribute('aria-selected', tab === 'tasks');
+  $('list-title').textContent = tab === 'tasks' ? 'נשלח לצלול השבוע' : 'השבוע';
+  const isTaskDraft = (d) => d.route === 'tzalul' || isTaskRecording(d.transcript);
+  list.innerHTML = '';
+  for (const d of state.drafts.filter(d => (tab === 'tasks') === isTaskDraft(d))) {
     const b = document.createElement('button');
-    b.className = 'draft-card' + (d.error ? ' err' : '');
-    const when = new Date(d.created);
-    b.innerHTML = `<div class="dest-line">${esc(d.error ? 'לא נערכה עדיין — תנסה שוב אוטומטית' : (d.proposal ? destLabel(d.proposal) : 'בעריכה…'))} · ${heDate(when)}</div>
-      <div class="t">${esc(d.proposal?.title || 'הערה ללא כותרת')}</div>
-      <div class="ex">${esc(d.proposal?.text || d.transcript)}</div>`;
-    b.onclick = () => openDraft(d);
+    b.className = (tab === 'tasks' ? 'task-card' : 'note-card') + (d.error ? ' err' : '');
+    b.innerHTML = `<div class="top"><span>${esc(d.error ? 'עוד לא נשלח — ינסה שוב: ' + d.error : 'בעיבוד…')}</span></div><div class="ex">${esc(d.transcript)}</div>`;
+    b.onclick = () => processPending();
     list.appendChild(b);
   }
-  for (const e of state.log) {
-    const b = document.createElement('button');
-    b.className = 'note-card';
-    b.innerHTML = `<div class="top"><span class="chip-dest ${e.kind}">${esc(shortDest(e))}</span><span class="when">${esc(whenText(e.inserted))}</span></div>
-      <div class="t">${esc(e.title || 'הערה')}</div>
-      <div class="ex">${esc(e.text)}</div>`;
-    b.onclick = () => openNote(e);
-    list.appendChild(b);
+  if (tab === 'tasks') {
+    const tl = (await readJSON('taskLog')).filter(x => Date.now() - new Date(x.inserted).getTime() < 7 * 864e5).sort((a, b) => b.inserted.localeCompare(a.inserted));
+    for (const x of tl) {
+      const c = document.createElement('div'); c.className = 'task-card';
+      c.innerHTML = `<div class="top"><span>${esc(whenText(x.inserted))}</span><span>${x.tasks.length === 1 ? 'משימה אחת' : x.tasks.length + ' משימות'}</span></div>` +
+        x.tasks.map(t => `<div class="task-item"><span class="box"></span><span>${esc(t.title)}</span>${t.due ? `<span class="due">עד ${esc(t.due.split('-').reverse().slice(0, 2).join('.'))}</span>` : ''}<span class="lst">${esc(t.project || TZ_LISTS[t.list] || '')}</span></div>`).join('');
+      list.appendChild(c);
+    }
+    $('drawer-empty').textContent = 'עוד לא נשלחו משימות השבוע. התחל הקלטה במילה "משימה".';
+    $('drawer-empty').classList.toggle('hidden', list.children.length > 0);
+  } else {
+    for (const e of state.log) {
+      const b = document.createElement('button');
+      b.className = 'note-card';
+      b.innerHTML = `<div class="top"><span class="chip-dest ${e.kind}">${esc(shortDest(e))}</span><span class="when">${esc(whenText(e.inserted))}</span></div>
+        <div class="t">${esc(e.title || 'הערה')}</div>
+        <div class="ex">${esc(e.text)}</div>`;
+      b.onclick = () => openNote(e);
+      list.appendChild(b);
+    }
+    $('drawer-empty').textContent = 'עוד לא נכנסו הערות השבוע. הקש על המיקרופון ודבר.';
+    $('drawer-empty').classList.toggle('hidden', list.children.length > 0);
   }
   refreshWidget();
 }
@@ -426,7 +443,7 @@ async function processTranscript(transcript) {
   try { await saveDraft(d); }
   catch (e) { toast('לא הצלחתי לשמור: ' + e.message, 5000); show('home'); return; }
   state.drafts.unshift(d);
-  toast('נשמר ✓ — ייכנס לכספת בעוד רגע', 2200);
+  toast(isTaskRecording(transcript) ? 'נשמר ✓ — נשלח לצלול בעוד רגע' : 'נשמר ✓ — ייכנס לכספת בעוד רגע', 2200);
   await renderHome().catch(() => { });
   show('home');
   if (state.fromWidget) { state.fromWidget = false; setTimeout(() => { try { AppP.minimizeApp(); } catch { } }, 700); }
@@ -444,6 +461,11 @@ async function processPending() {
     if (!pending.length) return;
     const map = await buildVaultMap();
     for (const d of pending) {
+      if (isTaskRecording(d.transcript)) {
+        try { const sent = await sendToTzalul(d); await deleteDraft(d); toast(sent.length === 1 ? 'משימה נכנסה לצלול' : `${sent.length} משימות נכנסו לצלול`, 2500); }
+        catch (e) { d.error = e.message; d.route = 'tzalul'; await saveDraft(d).catch(() => { }); }
+        continue;
+      }
       try { d.proposal = await callClaude(d.transcript, map); d.error = null; }
       catch (e) { d.error = e.message; await saveDraft(d).catch(() => { }); continue; }
       // נכנס לכספת מיד — בלי אישור. הסקירה השבועית תאפשר לתקן בדיעבד.
@@ -608,6 +630,7 @@ async function openSettings() {
   $('model').value = state.model;
   $('speech-mode').value = (await getPref('inputMode')) || 'keyboard';
   renderDictionary();
+  renderTzStatus();
   $('key-status').textContent = state.apiKey ? 'יש מפתח שמור' : '';
   show('settings');
 }
@@ -726,6 +749,132 @@ async function renderDictionary() {
   });
 }
 
+
+
+/* ===================== צלול ===================== */
+const TZ = { apiKey: 'AIzaSyA2tDkYASuqqOnUiR19EqBu7QiaT7NgpxY', project: 'tzalul-b75d5' };
+const TZ_LISTS = { inbox: 'תיבת דואר נכנס', next: 'הפעולה הבאה', waiting: 'ממתין ל…', scheduled: 'מתוזמן', someday: 'יום מן הימים', later: 'מאוחר יותר' };
+
+function isTaskRecording(t) { return /^\s*(משימה|משימות|לצלול|צלול)[\s:,.\-–—]/.test(String(t) + ' '); }
+
+async function tzLogin(email, password) {
+  const r = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${TZ.apiKey}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password, returnSecureToken: true }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const m = d?.error?.message || '';
+    throw new Error(/INVALID|PASSWORD|EMAIL_NOT_FOUND/.test(m) ? 'האימייל או הסיסמה שגויים' : 'ההתחברות נכשלה: ' + m);
+  }
+  await setPref('tzAuth', JSON.stringify({ uid: d.localId, email: d.email, refresh: d.refreshToken, token: d.idToken, exp: Date.now() + (+d.expiresIn - 60) * 1000 }));
+}
+async function tzAuth() {
+  let a; try { a = JSON.parse((await getPref('tzAuth')) || 'null'); } catch { a = null; }
+  if (!a) return null;
+  if (Date.now() < a.exp) return a;
+  const r = await fetch(`https://securetoken.googleapis.com/v1/token?key=${TZ.apiKey}`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(a.refresh)}` });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error('החיבור לצלול פג — התחבר מחדש בהגדרות');
+  a.token = d.id_token; a.refresh = d.refresh_token; a.exp = Date.now() + (+d.expires_in - 60) * 1000;
+  await setPref('tzAuth', JSON.stringify(a));
+  return a;
+}
+const tzDocs = (uid) => `https://firestore.googleapis.com/v1/projects/${TZ.project}/databases/(default)/documents/users/${uid}/items`;
+
+function toFs(v) {
+  if (v === null || v === undefined) return { nullValue: null };
+  if (typeof v === 'boolean') return { booleanValue: v };
+  if (typeof v === 'number') return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+  if (typeof v === 'string') return { stringValue: v };
+  if (Array.isArray(v)) return { arrayValue: { values: v.map(toFs) } };
+  return { mapValue: { fields: Object.fromEntries(Object.entries(v).map(([k, x]) => [k, toFs(x)])) } };
+}
+function fromFs(f) {
+  if (!f) return null;
+  if ('stringValue' in f) return f.stringValue; if ('booleanValue' in f) return f.booleanValue;
+  if ('integerValue' in f) return +f.integerValue; if ('doubleValue' in f) return f.doubleValue;
+  if ('nullValue' in f) return null;
+  if ('arrayValue' in f) return (f.arrayValue.values || []).map(fromFs);
+  if ('mapValue' in f) return Object.fromEntries(Object.entries(f.mapValue.fields || {}).map(([k, x]) => [k, fromFs(x)]));
+  return null;
+}
+
+/** הפרויקטים הפעילים בצלול — כדי ש-Claude ישייך משימות לפרויקט קיים. */
+async function tzProjects(a) {
+  const out = []; let page = '';
+  for (let i = 0; i < 10; i++) {
+    const r = await fetch(`${tzDocs(a.uid)}?pageSize=300${page ? '&pageToken=' + page : ''}`, { headers: { authorization: 'Bearer ' + a.token } });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error('אין גישה לצלול: ' + (d?.error?.message || r.status));
+    for (const doc of d.documents || []) {
+      const it = Object.fromEntries(Object.entries(doc.fields || {}).map(([k, x]) => [k, fromFs(x)]));
+      if (it.type === 'project' && !it.done && it.list !== 'trash') out.push({ id: doc.name.split('/').pop(), title: it.title });
+    }
+    if (!d.nextPageToken) break; page = d.nextPageToken;
+  }
+  return out;
+}
+
+const TASK_PROMPT = `אתה מפרק הקלטה קולית למשימות עבור אפליקציית ניהול המשימות "צלול" (שיטת GTD).
+החזר JSON בלבד: {"tasks":[{"title":"","note":"","list":"inbox","due":"","start":"","project":"","tags":[],"focus":false}]}
+כללים:
+- כל פעולה נפרדת שהמשתמש אמר = משימה נפרדת. title: פעולה קצרה וברורה שמתחילה בפועל, בלשונו ("להתקשר לדפוס בנוגע להגהות"). note: פרטים נוספים שאמר, אם יש.
+- התעלם ממילת הפתיחה ("משימה", "לצלול").
+- list: "next" אם זו פעולה ברורה לביצוע בהקדם; "waiting" אם הוא מחכה למישהו אחר; "scheduled" אם אמר מתי להתחיל (אז start); "someday" ל"אולי פעם"; "later" ל"לא עכשיו אבל בטוח"; "inbox" אם לא ברור.
+- due: תאריך יעד (דדליין) בפורמט YYYY-MM-DD, רק אם נאמר. start: תאריך התחלה, רק אם נאמר. חשב תאריכים יחסיים ("יום חמישי", "מחר", "בעוד שבוע") לפי התאריך של היום שתקבל.
+- project: רק אם הוזכר פרויקט מהרשימה — כתוב את שמו בדיוק כמו ברשימה. אחרת ריק.
+- focus: true רק אם אמר "היום", "דחוף" או "לפוקוס".
+- tags: רק אם אמר במפורש תגית.`;
+
+async function parseTasks(transcript, projects) {
+  const days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+  const now = new Date();
+  const user = `היום: יום ${days[now.getDay()]}, ${isoDate(now)}\nפרויקטים פעילים בצלול: ${JSON.stringify(projects.map(p => p.title))}\n${await personalContext()}\nההקלטה:\n"""\n${transcript}\n"""`;
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': state.apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+    body: JSON.stringify({ model: state.model, max_tokens: 2000, system: TASK_PROMPT, messages: [{ role: 'user', content: user }] }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(res.status === 401 ? 'המפתח לא תקין או שפג תוקפו' : 'שגיאה מ-Claude: ' + (data?.error?.message || res.status));
+  const txt = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+  const m = txt.match(/\{[\s\S]*\}/);
+  const tasks = (m ? JSON.parse(m[0]).tasks : []) || [];
+  return tasks.filter(t => t && t.title).map(t => ({ ...t, list: TZ_LISTS[t.list] ? t.list : 'inbox' }));
+}
+
+async function sendToTzalul(d) {
+  const a = await tzAuth();
+  if (!a) throw new Error('לא מחובר לצלול — התחבר בהגדרות');
+  const projects = await tzProjects(a);
+  const tasks = await parseTasks(d.transcript, projects);
+  if (!tasks.length) throw new Error('לא זוהו משימות בהקלטה');
+  const sent = [];
+  let k = 0;
+  for (const t of tasks) {
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const proj = t.project ? projects.find(p => p.title === t.project) : null;
+    const item = { type: 'task', title: t.title, note: t.note || '', list: t.list, parent: proj ? proj.id : '', area: '', tags: t.tags || [],
+      due: t.due || '', start: t.start || '', focus: !!t.focus, energy: '', time: 0, repeat: null, done: false, completedAt: 0,
+      created: Date.now(), order: Date.now() + (k++), updated: Date.now() };
+    const r = await fetch(`${tzDocs(a.uid)}/${id}`, { method: 'PATCH',
+      headers: { authorization: 'Bearer ' + a.token, 'content-type': 'application/json' },
+      body: JSON.stringify({ fields: Object.fromEntries(Object.entries(item).map(([x, v]) => [x, toFs(v)])) }) });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error('הכתיבה לצלול נכשלה: ' + (e?.error?.message || r.status)); }
+    sent.push({ title: t.title, list: t.list, due: t.due || '', project: proj ? proj.title : '' });
+  }
+  const log = await readJSON('taskLog');
+  log.push({ id: d.id, created: d.created, inserted: new Date().toISOString(), transcript: d.transcript, tasks: sent });
+  await writeJSON('taskLog', log.filter(x => Date.now() - new Date(x.inserted).getTime() < 60 * 864e5));
+  return sent;
+}
+
+async function renderTzStatus() {
+  let a = null; try { a = JSON.parse((await getPref('tzAuth')) || 'null'); } catch { }
+  $('tz-status').textContent = a ? `✓ מחובר לצלול (${a.email})` : 'לא מחובר';
+  $('tz-form').classList.toggle('hidden', !!a);
+  $('btn-tz-logout').classList.toggle('hidden', !a);
+}
 
 /* ===================== מסך קריאה ועריכה ===================== */
 function shortDest(e) {
@@ -1036,6 +1185,15 @@ function wire() {
   $('btn-rec-cancel').onclick = () => stopRecording(true);
   $('btn-settings').onclick = openSettings;
   $('btn-review').onclick = openReview;
+  $('tab-notes').onclick = () => { state.tab = 'notes'; renderHome(); };
+  $('tab-tasks').onclick = () => { state.tab = 'tasks'; renderHome(); };
+  $('btn-tz-login').onclick = async () => {
+    const em = $('tz-email').value.trim(), pw = $('tz-pass').value;
+    if (!em || !pw) { toast('צריך אימייל וסיסמה'); return; }
+    try { await tzLogin(em, pw); $('tz-pass').value = ''; await renderTzStatus(); toast('מחובר לצלול'); processPending(); }
+    catch (e) { $('tz-status').textContent = e.message; }
+  };
+  $('btn-tz-logout').onclick = async () => { await setPref('tzAuth', ''); renderTzStatus(); };
   $('btn-note-back').onclick = async () => { await renderHome(); show('home'); };
   $('btn-note-edit').onclick = startNoteEdit;
   $('btn-note-save').onclick = saveNote;

@@ -12,8 +12,12 @@
       <span class="rt">סקירה שבועית</span>
       <span id="review-sub" class="rs"></span>
     </button>
+    <div class="tabs" role="tablist">
+      <button id="tab-notes" class="tab on" role="tab" aria-selected="true">הערות</button>
+      <button id="tab-tasks" class="tab" role="tab" aria-selected="false">לצלול</button>
+    </div>
     <div class="section-title">
-      <span>השבוע</span>
+      <span id="list-title">השבוע</span>
       <span id="drawer-count" class="muted"></span>
     </div>
     <div id="drawer-list" class="list"></div>
@@ -182,6 +186,18 @@
       <option value="engine">מנוע מובנה (תמלול חי)</option>
     </select>
     <div class="muted small">המקלדת משתמשת במנוע שכבר עובד לך טוב בעברית.</div>
+
+    <div class="label">חיבור לצלול</div>
+    <div class="card">
+      <div id="tz-status" class="small">לא מחובר</div>
+      <div class="muted small">הקלטה שמתחילה ב"משימה" או "לצלול" תיכנס לצלול. התחבר עם האימייל והסיסמה של צלול — הסיסמה לא נשמרת.</div>
+      <div id="tz-form" class="col gap">
+        <input id="tz-email" type="email" placeholder="אימייל של צלול" autocomplete="username">
+        <input id="tz-pass" type="password" placeholder="סיסמה" autocomplete="current-password">
+        <button id="btn-tz-login" class="btn primary">התחברות</button>
+      </div>
+      <button id="btn-tz-logout" class="btn ghost hidden">התנתקות</button>
+    </div>
 
     <div class="label">מילון אישי</div>
     <div class="card">
