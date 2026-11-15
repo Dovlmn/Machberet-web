@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-15.3';
+const WEB_VERSION = '2026-11-15.4';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -277,6 +277,8 @@ async function renderHome() {
   const n = state.log.length;
   $('drawer-count').textContent = n ? (n === 1 ? 'הערה אחת השבוע' : `${n} הערות השבוע`) : '';
   $('drawer-empty').classList.toggle('hidden', state.drafts.length + n > 0);
+  const pendingReview = state.log.filter(e => !e.reviewed).length;
+  $('review-sub').textContent = pendingReview ? (pendingReview === 1 ? 'הערה אחת מחכה לסקירה' : `${pendingReview} הערות מחכות לסקירה`) : 'הכול נסקר';
   for (const d of state.drafts) {
     const b = document.createElement('button');
     b.className = 'draft-card' + (d.error ? ' err' : '');
@@ -623,12 +625,244 @@ async function testKey() {
   } catch (e) { $('key-status').textContent = 'לא עובד: ' + e.message; }
 }
 
+
+/* ===================== סקירה שבועית ===================== */
+const KIND_LABEL = { source: 'מקורות', course: 'קורסים', idea: 'הגינה', inbox: 'זמני' };
+const rv = { entries: [], analysis: null, busy: false };
+
+function weekRange() {
+  const end = new Date(), start = new Date(Date.now() - 6 * 864e5);
+  return `${pad(start.getDate())}.${pad(start.getMonth() + 1)}–${pad(end.getDate())}.${pad(end.getMonth() + 1)}`;
+}
+
+/** מאתר את ההערה בכספת: בלוק ### בתוך דף מקור/קורס, או קובץ שלם בזמני/בגינה. מחזיר null אם שונתה ידנית. */
+async function locateEntry(e) {
+  const content = await readNote(e.path);
+  if (content == null) return { missing: true };
+  const probe = (e.text || '').trim();
+  if (e.kind === 'source' || e.kind === 'course') {
+    const lines = content.split('\n');
+    const idx = lines.findIndex(l => l.trim() === `### ${e.title}`);
+    if (idx === -1) return { edited: true };
+    let end = lines.length;
+    for (let i = idx + 1; i < lines.length; i++) if (/^#{1,3}\s/.test(lines[i])) { end = i; break; }
+    const block = lines.slice(idx, end).join('\n');
+    if (probe && !block.includes(probe)) return { edited: true };
+    return { content, lines, idx, end, file: false };
+  }
+  if (probe && !content.includes(probe)) return { edited: true };
+  return { content, file: true };
+}
+
+async function removeEntry(e) {
+  const loc = await locateEntry(e);
+  if (loc.missing) return true;
+  if (loc.edited) throw new Error('ההערה שונתה ידנית באובסידיאן — לא נוגע בה');
+  if (loc.file) { await Vault.deleteFile({ path: e.path }); return true; }
+  const before = loc.lines.slice(0, loc.idx).join('\n').replace(/\s*$/, '');
+  const after = loc.lines.slice(loc.end).join('\n').replace(/^\s*/, '');
+  await writeNote(e.path, before + (after ? '\n\n' + after : '') + '\n');
+  return true;
+}
+
+async function insertEntry(e) {
+  const d = { id: e.id, created: e.created, transcript: e.transcript,
+    proposal: { kind: e.kind, target: e.target || '', section: e.section || '', title: e.title, text: e.text,
+      tags: e.tags || [], newTag: '', links: (e.links || []).map(l => ({ ...l, accepted: true })), why: e.why } };
+  return await approve(d);
+}
+
+async function updateLogEntry(e) {
+  const all = await readJSON('log');
+  const i = all.findIndex(x => x.id === e.id);
+  if (i >= 0) all[i] = e; else all.push(e);
+  await writeJSON('log', all);
+}
+async function dropLogEntry(e) { await writeJSON('log', (await readJSON('log')).filter(x => x.id !== e.id)); }
+
+/** שינוי הערה: מוציאים אותה ממקומה ומכניסים מחדש (אותו יעד או יעד חדש). */
+async function rewriteEntry(e, changes) {
+  await removeEntry(e);
+  const ne = { ...e, ...changes };
+  ne.path = await insertEntry(ne);
+  await updateLogEntry(ne);
+  return ne;
+}
+
+const REVIEW_PROMPT = `אתה עוזר למשתמש בסקירה שבועית של ההערות שהקליט השבוע ונכנסו לכספת אובסידיאן שלו (שיטת תיבת הפתקים של זונקה אהרנס).
+קבל את רשימת ההערות של השבוע ואת מפת הכספת, והחזר JSON בלבד:
+{"threads":[{"title":"","ids":[],"why":"","draft":""}],"moves":[{"id":"","kind":"source|course|idea","target":"","section":"","why":""}],"links":[{"id":"","title":"","reason":""}],"summary":""}
+
+- threads: רעיון שחזר ביותר מהערה אחת השבוע (גם במקורות שונים). title = הרעיון כמשפט קצר. draft = טיוטה קצרה (3–6 משפטים) של הערה עצמאית בלשונו של המשתמש, שמגבשת את החוט — רק ממה שכתוב בהערות, בלי להוסיף תוכן. אם אין חוט אמיתי — מערך ריק. עד 2.
+- moves: רק להערות שנמצאות בזמני (kind=inbox). הצע יעד אם ברור: מקור/קורס קיים מהרשימה (target בדיוק כמו ברשימה), או "idea" לגינה אם זו מחשבה עצמאית ומגובשת. אם לא ברור — אל תציע.
+- links: קישור מהערה של השבוע להערה קיימת בכספת (כותרת מדויקת מהרשימה) שיש ביניהן קשר ממשי. reason = סוג הקשר (מחזק/סותר/מרחיב/מקביל) ומשפט קצר. עד 5 בסך הכול.
+- summary: משפט אחד על מה עסק השבוע.`;
+
+async function analyzeWeek(entries, map) {
+  const notes = entries.map(e => ({ id: e.id, kind: e.kind, where: e.path.replace(/\.md$/, ''), title: e.title, text: e.text }));
+  const user = `מפת הכספת:
+מקורות: ${JSON.stringify(map.sources.map(x => x.title))}
+קורסים: ${JSON.stringify(map.courses.map(x => x.title))}
+הגינה: ${JSON.stringify(map.ideas)}
+שערים: ${JSON.stringify(map.gates)}
+אחרות: ${JSON.stringify(map.other.slice(0, 100))}
+
+ההערות של השבוע:
+${JSON.stringify(notes)}`;
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': state.apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+    body: JSON.stringify({ model: state.model, max_tokens: 3000, system: REVIEW_PROMPT, messages: [{ role: 'user', content: user }] }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error?.message || res.status);
+  const txt = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+  const m = txt.match(/\{[\s\S]*\}/);
+  const a = m ? JSON.parse(m[0]) : {};
+  return { threads: a.threads || [], moves: a.moves || [], links: a.links || [], summary: a.summary || '' };
+}
+
+async function openReview() {
+  if (!(await vaultReady())) { toast('קודם בחר את תיקיית הכספת בהגדרות'); return; }
+  rv.entries = (await loadLog(7)).filter(e => !e.reviewed);
+  rv.analysis = null;
+  $('review-range').textContent = weekRange();
+  show('review');
+  renderReview();
+  if (rv.entries.length && state.apiKey) {
+    try { const map = await buildVaultMap(); rv.analysis = await analyzeWeek(rv.entries, map); }
+    catch (e) { rv.analysis = { threads: [], moves: [], links: [], summary: '', error: e.message }; }
+    renderReview();
+  }
+}
+
+function renderReview() {
+  const box = $('review-content');
+  box.innerHTML = '';
+  const E = rv.entries;
+  if (!E.length) { box.innerHTML = '<div class="empty">אין השבוע הערות שמחכות לסקירה.</div>'; return; }
+
+  // סיכום
+  const counts = {};
+  for (const e of E) { const k = e.kind === 'source' || e.kind === 'course' ? e.target : KIND_LABEL[e.kind]; counts[k] = (counts[k] || 0) + 1; }
+  const max = Math.max(...Object.values(counts));
+  const sum = document.createElement('div'); sum.className = 'rv-card';
+  sum.innerHTML = `<h3>במה עסקת השבוע · ${E.length === 1 ? 'הערה אחת' : E.length + ' הערות'}</h3>
+    ${rv.analysis?.summary ? `<div class="rv-why">${esc(rv.analysis.summary)}</div>` : ''}
+    ${Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<div><div class="rv-row"><span>${esc(k)}</span><span>${n}</span></div><div class="rv-bar"><span style="width:${Math.round(n / max * 100)}%"></span></div></div>`).join('')}`;
+  box.appendChild(sum);
+
+  if (!rv.analysis) { const l = document.createElement('div'); l.className = 'rv-loading'; l.textContent = state.apiKey ? 'Claude עובר על השבוע…' : ''; box.appendChild(l); }
+  else if (rv.analysis.error) { const l = document.createElement('div'); l.className = 'rv-loading'; l.textContent = 'הניתוח לא הצליח: ' + rv.analysis.error; box.appendChild(l); }
+
+  // חוטים
+  for (const t of (rv.analysis?.threads || [])) {
+    if (t.done) continue;
+    const c = document.createElement('div'); c.className = 'rv-card rv-thread';
+    c.innerHTML = `<div class="rv-dest">חוט שחזר השבוע</div><h3>${esc(t.title)}</h3><div class="rv-why">${esc(t.why || '')}</div>
+      <textarea aria-label="טיוטת הערה לגינה">${esc(t.draft || '')}</textarea>
+      <div class="rv-actions"><button class="sbtn primary">יצירת הערה בגינה</button><button class="sbtn">לא עכשיו</button></div>`;
+    const [mk, skip] = c.querySelectorAll('button');
+    mk.onclick = async () => {
+      const text = c.querySelector('textarea').value.trim(); if (!text) return;
+      const related = E.filter(e => (t.ids || []).includes(e.id));
+      const links = related.map(e => ({ title: e.kind === 'source' || e.kind === 'course' ? e.target : e.title, reason: 'מקור החוט' }));
+      const ne = { id: 'thread-' + stamp(), created: new Date().toISOString(), kind: 'idea', title: t.title, text, tags: [], links, transcript: '', why: 'חוט מהסקירה השבועית' };
+      try { ne.path = await insertEntry(ne); ne.inserted = new Date().toISOString(); ne.reviewed = true; await updateLogEntry(ne); t.done = true; toast('נוצרה הערה בגינה'); renderReview(); }
+      catch (e) { toast('לא הצליח: ' + e.message, 4000); }
+    };
+    skip.onclick = () => { t.done = true; renderReview(); };
+    box.appendChild(c);
+  }
+
+  // הערות
+  for (const e of E) box.appendChild(reviewCard(e));
+}
+
+function reviewCard(e) {
+  const c = document.createElement('div'); c.className = 'rv-card' + (e._done ? ' rv-done' : '');
+  const where = e.kind === 'source' || e.kind === 'course' ? `${KIND_LABEL[e.kind]} ← ${e.target}${e.section ? ' ← ' + e.section : ''}` : KIND_LABEL[e.kind];
+  const move = (rv.analysis?.moves || []).find(m => m.id === e.id && !m.done);
+  const links = (rv.analysis?.links || []).filter(l => l.id === e.id && !l.done);
+  const sugg = (e.suggested || []).filter(l => !(e.links || []).some(x => x.title === l.title));
+  c.innerHTML = `<div class="rv-dest">${esc(where)} · ${heDate(new Date(e.inserted))}</div>
+    <input class="rv-title" value="${esc(e.title)}" aria-label="כותרת">
+    <textarea class="rv-text" aria-label="נוסח">${esc(e.text)}</textarea>
+    ${move ? `<div class="rv-suggest"><span>להעביר ל${esc(move.kind === 'idea' ? 'גינה' : move.target + (move.section ? ' ← ' + move.section : ''))}? <span class="rv-why">${esc(move.why || '')}</span></span><button class="sbtn primary mv-acc">העברה</button></div>` : ''}
+    ${(links.length || sugg.length) ? `<div class="rv-why">קשרים מוצעים:</div><div class="rv-chips">${[...links, ...sugg].map((l, i) => `<button class="rv-chip" data-i="${i}" title="${esc(l.reason || '')}">+ ${esc(l.title)}</button>`).join('')}</div>` : ''}
+    <div class="rv-move hidden">
+      <select class="mv-kind" aria-label="יעד"><option value="inbox">זמני</option><option value="source">מקור</option><option value="course">קורס</option><option value="idea">הגינה</option></select>
+      <input class="mv-target" placeholder="שם הספר / הקורס" list="dest-options">
+      <input class="mv-section" placeholder="פרק (לא חובה)">
+      <button class="sbtn primary mv-go">העבר לשם</button>
+    </div>
+    <div class="rv-warn hidden"></div>
+    <div class="rv-actions">
+      <button class="sbtn primary b-ok">✓ נסקר</button>
+      <button class="sbtn b-save">שמירת שינויים</button>
+      <button class="sbtn b-move">העברה</button>
+      <button class="sbtn b-open">פתיחה באובסידיאן</button>
+      <button class="sbtn danger b-del">מחיקה</button>
+    </div>`;
+  const warn = (m) => { const w = c.querySelector('.rv-warn'); w.textContent = m; w.classList.remove('hidden'); };
+  const run = async (fn) => { try { await fn(); } catch (err) { warn(err.message); } };
+  const replace = (ne) => { const i = rv.entries.findIndex(x => x.id === e.id); rv.entries[i] = ne; renderReview(); };
+
+  c.querySelector('.b-ok').onclick = () => run(async () => { e.reviewed = true; await updateLogEntry(e); e._done = true; c.classList.add('rv-done'); });
+  c.querySelector('.b-open').onclick = () => openObsidian(e.path);
+  c.querySelector('.b-save').onclick = () => run(async () => {
+    const title = c.querySelector('.rv-title').value.trim(), text = c.querySelector('.rv-text').value.trim();
+    if (title === e.title && text === e.text) { toast('אין שינויים'); return; }
+    replace(await rewriteEntry(e, { title, text })); toast('נשמר בכספת');
+  });
+  c.querySelector('.b-del').onclick = () => run(async () => {
+    if (!confirm('למחוק את ההערה מהכספת?')) return;
+    await removeEntry(e); await dropLogEntry(e);
+    rv.entries = rv.entries.filter(x => x.id !== e.id); renderReview(); toast('נמחק');
+  });
+  c.querySelector('.b-move').onclick = () => { c.querySelector('.rv-move').classList.toggle('hidden'); fillDestOptionsFor('source'); };
+  c.querySelector('.mv-kind').onchange = (ev) => fillDestOptionsFor(ev.target.value);
+  c.querySelector('.mv-go').onclick = () => run(async () => {
+    const kind = c.querySelector('.mv-kind').value, target = c.querySelector('.mv-target').value.trim(), section = c.querySelector('.mv-section').value.trim();
+    if ((kind === 'source' || kind === 'course') && !target) { warn('חסר שם ספר או קורס'); return; }
+    replace(await rewriteEntry(e, { kind, target, section, title: c.querySelector('.rv-title').value.trim(), text: c.querySelector('.rv-text').value.trim() }));
+    toast('הועבר');
+  });
+  if (move) c.querySelector('.mv-acc').onclick = () => run(async () => {
+    replace(await rewriteEntry(e, { kind: move.kind, target: move.target || '', section: move.section || '' })); move.done = true; toast('הועבר');
+  });
+  c.querySelectorAll('.rv-chip').forEach(b => b.onclick = () => run(async () => {
+    const l = [...links, ...sugg][+b.dataset.i];
+    replace(await rewriteEntry(e, { links: [...(e.links || []), { title: l.title, reason: l.reason || '' }] })); l.done = true; toast('הקישור נוסף');
+  }));
+  return c;
+}
+
+async function fillDestOptionsFor(kind) {
+  const folder = kind === 'course' ? FOLDERS.course : FOLDERS.source;
+  const files = await listNotes(folder);
+  $('dest-options').innerHTML = files.map(f => `<option value="${esc(f.path.split('/').pop().replace(/\.md$/i, ''))}">`).join('');
+}
+
+async function finishReview() {
+  const all = await readJSON('log');
+  const ids = new Set(rv.entries.map(e => e.id));
+  for (const x of all) if (ids.has(x.id)) x.reviewed = true;
+  await writeJSON('log', all);
+  await setPref('lastReview', new Date().toISOString());
+  toast('הסקירה הושלמה', 2500);
+  await renderHome(); show('home');
+}
+
 /* ---------- חיבור אירועים ---------- */
 function wire() {
   $('btn-record').onclick = startRecording;
   $('btn-rec-stop').onclick = () => stopRecording(false);
   $('btn-rec-cancel').onclick = () => stopRecording(true);
   $('btn-settings').onclick = openSettings;
+  $('btn-review').onclick = openReview;
+  $('btn-review-back').onclick = async () => { await renderHome(); show('home'); };
+  $('btn-review-done').onclick = finishReview;
   $('btn-settings-back').onclick = async () => { await renderHome(); show('home'); };
   $('btn-draft-back').onclick = async () => { await saveDraft(collectDraft()).catch(() => { }); await renderHome(); show('home'); };
   $('draft-kind').onchange = () => { updateDestFields(); fillDestOptions(); };
@@ -671,6 +905,7 @@ function wire() {
     if (active === 'recording') return stopRecording(true);
     if (active === 'home') return AppP.exitApp();
     if (active === 'draft') { await saveDraft(collectDraft()).catch(() => { }); }
+    if (active === 'review') { await renderHome(); show('home'); return; }
     await renderHome(); show('home');
   });
   AppP.addListener('resume', () => { if (document.querySelector('.screen.active')?.id === 'home') renderHome(); processPending(); });

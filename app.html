@@ -8,6 +8,10 @@
   </header>
   <div class="content">
     <div id="setup-hint" class="notice hidden"></div>
+    <button id="btn-review" class="review-btn">
+      <span class="rt">סקירה שבועית</span>
+      <span id="review-sub" class="rs"></span>
+    </button>
     <div class="section-title">
       <span>השבוע</span>
       <span id="drawer-count" class="muted"></span>
@@ -97,6 +101,19 @@
 </section>
 
 <!-- הגדרות -->
+<section id="review" class="screen">
+  <header class="bar">
+    <button class="icon-btn" id="btn-review-back" aria-label="חזרה">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+    <div class="bar-sub">סקירה שבועית <span id="review-range" class="bar-range"></span></div>
+  </header>
+  <div class="content" id="review-content"></div>
+  <footer class="actions">
+    <button id="btn-review-done" class="btn primary">סיום הסקירה</button>
+  </footer>
+</section>
+
 <section id="settings" class="screen">
   <header class="bar">
     <button class="icon-btn" id="btn-settings-back" aria-label="חזרה">
