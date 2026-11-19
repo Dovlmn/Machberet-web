@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-19.2';
+const WEB_VERSION = '2026-11-19.3';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -264,7 +264,9 @@ async function loadLog(days = 7) {
   return out;
 }
 
+let renderGen = 0;
 async function renderHome() {
+  const gen = ++renderGen;
   const ready = await vaultReady();
   const hint = $('setup-hint');
   if (!ready || !state.apiKey) {
@@ -273,8 +275,7 @@ async function renderHome() {
     hint.onclick = openSettings;
   } else hint.classList.add('hidden');
   if (ready) { await loadDrafts(); await loadLog().catch(() => { state.log = []; }); } else { state.drafts = []; state.log = []; }
-  const list = $('drawer-list');
-  list.innerHTML = '';
+  const list = document.createElement('div');
   const n = state.log.length;
   $('drawer-count').textContent = n ? (n === 1 ? 'הערה אחת השבוע' : `${n} הערות השבוע`) : '';
   $('drawer-empty').classList.toggle('hidden', state.drafts.length + n > 0);
@@ -284,7 +285,6 @@ async function renderHome() {
   for (const t of ['notes', 'tasks', 'rem']) { $('tab-' + t).classList.toggle('on', tab === t); $('tab-' + t).setAttribute('aria-selected', tab === t); }
   $('list-title').textContent = tab === 'tasks' ? 'נשלח לצלול השבוע' : tab === 'rem' ? 'תזכורות' : 'השבוע';
   const draftTab = (d) => (d.route === 'tzalul' || isTaskRecording(d.transcript)) ? 'tasks' : (d.route === 'reminder' || isReminderRecording(d.transcript)) ? 'rem' : 'notes';
-  list.innerHTML = '';
   for (const d of state.drafts.filter(d => draftTab(d) === tab)) {
     const b = document.createElement('button');
     b.className = (tab === 'tasks' ? 'task-card' : 'note-card') + (d.error ? ' err' : '');
@@ -319,6 +319,8 @@ async function renderHome() {
     $('drawer-empty').textContent = 'עוד לא נכנסו הערות השבוע. הקש על המיקרופון ודבר.';
     $('drawer-empty').classList.toggle('hidden', list.children.length > 0);
   }
+  if (gen !== renderGen) return;
+  $('drawer-list').replaceChildren(...list.childNodes);
   refreshWidget();
 }
 
@@ -865,15 +867,14 @@ async function createReminder(d) {
   let ok;
   try { ok = await setupReminders(); } catch (e) { throw new Error(notifErr(e)); }
   if (!ok) throw new Error('הגיגית צריכה הרשאה להתראות — אשר אותה בהגדרות הטלפון');
+  const existing = (await readJSON('reminders')).find(x => x.id === d.id);
+  if (existing) return existing;
   const r = await parseReminder(d.transcript);
   const when = reminderDate(r.at);
   if (!when) throw new Error('לא הבנתי מתי להזכיר — הקלט שוב עם שעה');
   const notifId = Math.floor(Date.now() / 1000) % 2000000000;
   const title = (r.title || d.transcript).trim();
-  try {
-    await Notif.schedule({ notifications: [{ id: notifId, title: '⏰ ' + title, body: r.body || reminderWhen(when.getTime()), channelId: 'reminders',
-      smallIcon: 'ic_stat_hagigit', iconColor: '#4886D8', schedule: { at: when, allowWhileIdle: true } }] });
-  } catch (e) { throw new Error(notifErr(e)); }
+  await scheduleReminder({ notifId, title, body: r.body || '', at: when.getTime() });
   const rem = { id: d.id, notifId, at: when.getTime(), title, body: r.body || '', transcript: d.transcript, created: new Date().toISOString() };
   const list = await readJSON('reminders');
   list.push(rem);
@@ -890,6 +891,46 @@ async function confirmReminder(r) {
   try { await Notif.schedule({ notifications: [{ id: (r.notifId + 1) % 2000000000, title: 'נקבעה ' + msg.replace(/^תזכורת/, 'תזכורת'), body: '', channelId: 'confirm', smallIcon: 'ic_stat_hagigit', iconColor: '#4886D8' }] }); } catch { }
 }
 
+async function scheduleReminder(r) {
+  try {
+    await Notif.schedule({ notifications: [{ id: r.notifId, title: '⏰ ' + r.title, body: r.body || reminderWhen(r.at), channelId: 'reminders',
+      smallIcon: 'ic_stat_hagigit', iconColor: '#4886D8', schedule: { at: new Date(r.at), allowWhileIdle: true } }] });
+  } catch (e) { throw new Error(notifErr(e)); }
+}
+
+/* ---------- עריכת תזכורת ---------- */
+let remEdit = null;
+function openReminder(r) {
+  remEdit = r;
+  const d = new Date(r.at);
+  $('rem-title').value = r.title;
+  $('rem-body').value = r.body || '';
+  $('rem-date').value = isoDate(d);
+  $('rem-time').value = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  $('rem-orig').textContent = r.transcript || '';
+  show('reminder');
+}
+async function saveReminder() {
+  const r = remEdit; if (!r) return;
+  const [y, mo, da] = $('rem-date').value.split('-').map(Number);
+  const [h, mi] = $('rem-time').value.split(':').map(Number);
+  const at = new Date(y, mo - 1, da, h, mi, 0, 0);
+  const title = $('rem-title').value.trim();
+  if (!title) { toast('חסר נושא לתזכורת'); return; }
+  if (isNaN(at) || at.getTime() < Date.now()) { toast('השעה שבחרת כבר עברה'); return; }
+  try { await Notif.cancel({ notifications: [{ id: r.notifId }] }); } catch { }
+  const upd = { ...r, title, body: $('rem-body').value.trim(), at: at.getTime() };
+  try { await scheduleReminder(upd); } catch (e) { toast(e.message, 5000); return; }
+  const list = (await readJSON('reminders')).filter(x => x.id !== r.id);
+  list.push(upd); await writeJSON('reminders', list);
+  toast('התזכורת עודכנה: ' + reminderWhen(upd.at));
+  remEdit = null; await renderHome(); show('home');
+}
+async function openNotifSettings() {
+  try { await Vault.openNotificationSettings({ channel: 'reminders' }); }
+  catch { toast('בהגדרות הטלפון: אפליקציות ← הגיגית ← התראות ← תזכורות', 6000); }
+}
+
 async function deleteReminder(r) {
   try { await Notif.cancel({ notifications: [{ id: r.notifId }] }); } catch { }
   const list = await readJSON('reminders');
@@ -902,8 +943,9 @@ async function renderReminders(list) {
   const past = all.filter(x => x.at < Date.now()).sort((a, b) => b.at - a.at);
   for (const r of [...up, ...past]) {
     const c = document.createElement('div'); c.className = 'task-card rem-card' + (r.at < Date.now() ? ' past' : '');
-    c.innerHTML = `<div class="top"><span class="rem-when">${esc(reminderWhen(r.at))}</span><button class="rem-del" aria-label="מחק תזכורת">✕</button></div><div class="rem-t">${esc(r.title)}</div>${r.body ? `<div class="ex">${esc(r.body)}</div>` : ''}`;
-    c.querySelector('.rem-del').onclick = async () => { await deleteReminder(r); toast('התזכורת נמחקה'); renderHome(); };
+    c.innerHTML = `<div class="top"><span class="rem-when">${esc(reminderWhen(r.at))}</span><button class="rem-del" aria-label="מחיקת התזכורת"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 7V4h4v3M6 7l1 13h10l1-13"/></svg></button></div><div class="rem-t">${esc(r.title)}</div>${r.body ? `<div class="ex">${esc(r.body)}</div>` : ''}`;
+    c.querySelector('.rem-del').onclick = async (ev) => { ev.stopPropagation(); await deleteReminder(r); toast('התזכורת נמחקה'); renderHome(); };
+    c.onclick = () => openReminder(r);
     list.appendChild(c);
   }
 }
@@ -1359,6 +1401,11 @@ function wire() {
   $('tab-notes').onclick = () => { state.tab = 'notes'; renderHome(); };
   $('tab-tasks').onclick = () => { state.tab = 'tasks'; renderHome(); };
   $('tab-rem').onclick = () => { state.tab = 'rem'; renderHome(); };
+  $('btn-rem-back').onclick = async () => { remEdit = null; await renderHome(); show('home'); };
+  $('btn-rem-save').onclick = saveReminder;
+  $('btn-rem-delete').onclick = async () => { if (!remEdit) return; await deleteReminder(remEdit); remEdit = null; toast('התזכורת נמחקה'); await renderHome(); show('home'); };
+  $('btn-rem-sound').onclick = openNotifSettings;
+  $('btn-notif-settings').onclick = openNotifSettings;
   $('btn-tz-login').onclick = async () => {
     const em = $('tz-email').value.trim(), pw = $('tz-pass').value;
     if (!em || !pw) { toast('צריך אימייל וסיסמה'); return; }

@@ -137,6 +137,31 @@
   </footer>
 </section>
 
+<section id="reminder" class="screen">
+  <header class="bar">
+    <button class="icon-btn" id="btn-rem-back" aria-label="חזרה">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+    <div class="bar-sub">תזכורת</div>
+    <button id="btn-rem-delete" class="icon-btn" aria-label="מחיקת התזכורת">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 7V4h4v3M6 7l1 13h10l1-13"/></svg>
+    </button>
+  </header>
+  <div class="content">
+    <label class="label" for="rem-title">מה להזכיר</label>
+    <input id="rem-title">
+    <label class="label" for="rem-date">מתי</label>
+    <div class="rem-dt"><input id="rem-date" type="date"><input id="rem-time" type="time"></div>
+    <label class="label" for="rem-body">פרטים (לא חובה)</label>
+    <textarea id="rem-body" rows="3"></textarea>
+    <button id="btn-rem-sound" class="link-btn">צליל וסוג ההתראה…</button>
+    <details class="rem-origd"><summary>מה אמרת במקור</summary><div id="rem-orig" class="note-orig"></div></details>
+  </div>
+  <footer class="actions">
+    <button id="btn-rem-save" class="btn primary">שמירה</button>
+  </footer>
+</section>
+
 <section id="review" class="screen">
   <header class="bar">
     <button class="icon-btn" id="btn-review-back" aria-label="חזרה">
@@ -212,6 +237,12 @@
         <input id="dict-right" placeholder="צריך להיות" aria-label="מה צריך להיות">
         <button id="btn-dict-add" class="btn primary small-btn">הוספה</button>
       </div>
+    </div>
+
+    <div class="label">תזכורות</div>
+    <div class="card small">
+      <div>הצליל, הרטט, וההופעה על המסך נקבעים בהגדרות ההתראות של הטלפון.</div>
+      <button id="btn-notif-settings" class="btn ghost">צליל וסוג ההתראה</button>
     </div>
 
     <div class="label">התיקיות בכספת</div>

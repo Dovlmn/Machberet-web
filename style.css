@@ -219,3 +219,10 @@ input, select, textarea { border: 0; border-radius: 4px; }
 .rem-t { font-size: 16px; }
 .rem-del { border: 0; background: transparent; color: var(--muted); font-size: 15px; width: 32px; height: 28px; }
 .rem-card.past { opacity: .55; }
+
+.rem-dt { display: flex; gap: 8px; }
+.rem-dt input { flex: 1; }
+.rem-card { cursor: pointer; }
+.rem-del svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#reminder .content { display: flex; flex-direction: column; gap: 8px; }
+.rem-origd { margin-top: 12px; font-size: 13px; }
