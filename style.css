@@ -213,3 +213,9 @@ input, select, textarea { border: 0; border-radius: 4px; }
 .task-item .due { font-size: 12px; color: var(--coral); white-space: nowrap; }
 .task-card.err .top { color: var(--coral); }
 #note .actions .btn.danger-solid { background: #FFFFFF; color: var(--coral); border-color: #F2C9C5; }
+
+.rem-card .top { align-items: center; }
+.rem-when { color: var(--teal); font-weight: 500; font-size: 13px; }
+.rem-t { font-size: 16px; }
+.rem-del { border: 0; background: transparent; color: var(--muted); font-size: 15px; width: 32px; height: 28px; }
+.rem-card.past { opacity: .55; }

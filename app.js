@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-19.1';
+const WEB_VERSION = '2026-11-19.2';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -8,6 +8,7 @@ const Dict = Cap.registerPlugin('Dictation');
 const Prefs = Cap.registerPlugin('Preferences');
 const AppP = Cap.registerPlugin('App');
 const Kbd = Cap.registerPlugin('Keyboard');
+const Notif = Cap.registerPlugin('LocalNotifications');
 
 const FOLDERS = { source: 'מקורות', idea: 'הגינה', course: 'קורסים', inbox: 'זמני', gate: 'שערים' };
 const DRAWER = '_מחברת/מגירה';
@@ -280,12 +281,11 @@ async function renderHome() {
   const pendingReview = state.log.filter(e => !e.reviewed).length;
   $('review-sub').textContent = pendingReview ? (pendingReview === 1 ? 'הערה אחת מחכה לסקירה' : `${pendingReview} הערות מחכות לסקירה`) : 'הכול נסקר';
   const tab = state.tab || 'notes';
-  $('tab-notes').classList.toggle('on', tab === 'notes'); $('tab-tasks').classList.toggle('on', tab === 'tasks');
-  $('tab-notes').setAttribute('aria-selected', tab === 'notes'); $('tab-tasks').setAttribute('aria-selected', tab === 'tasks');
-  $('list-title').textContent = tab === 'tasks' ? 'נשלח לצלול השבוע' : 'השבוע';
-  const isTaskDraft = (d) => d.route === 'tzalul' || isTaskRecording(d.transcript);
+  for (const t of ['notes', 'tasks', 'rem']) { $('tab-' + t).classList.toggle('on', tab === t); $('tab-' + t).setAttribute('aria-selected', tab === t); }
+  $('list-title').textContent = tab === 'tasks' ? 'נשלח לצלול השבוע' : tab === 'rem' ? 'תזכורות' : 'השבוע';
+  const draftTab = (d) => (d.route === 'tzalul' || isTaskRecording(d.transcript)) ? 'tasks' : (d.route === 'reminder' || isReminderRecording(d.transcript)) ? 'rem' : 'notes';
   list.innerHTML = '';
-  for (const d of state.drafts.filter(d => (tab === 'tasks') === isTaskDraft(d))) {
+  for (const d of state.drafts.filter(d => draftTab(d) === tab)) {
     const b = document.createElement('button');
     b.className = (tab === 'tasks' ? 'task-card' : 'note-card') + (d.error ? ' err' : '');
     b.innerHTML = `<div class="top"><span>${esc(d.error ? 'עוד לא נשלח — ינסה שוב: ' + d.error : 'בעיבוד…')}</span></div><div class="ex">${esc(d.transcript)}</div>`;
@@ -301,6 +301,10 @@ async function renderHome() {
       list.appendChild(c);
     }
     $('drawer-empty').textContent = 'עוד לא נשלחו משימות השבוע. התחל הקלטה במילה "משימה".';
+    $('drawer-empty').classList.toggle('hidden', list.children.length > 0);
+  } else if (tab === 'rem') {
+    await renderReminders(list);
+    $('drawer-empty').textContent = 'אין תזכורות. התחל הקלטה ב"תזכיר לי", למשל: "תזכיר לי ב-2:40 את השיחה עם נועה".';
     $('drawer-empty').classList.toggle('hidden', list.children.length > 0);
   } else {
     for (const e of state.log) {
@@ -443,7 +447,7 @@ async function processTranscript(transcript) {
   try { await saveDraft(d); }
   catch (e) { toast('לא הצלחתי לשמור: ' + e.message, 5000); show('home'); return; }
   state.drafts.unshift(d);
-  toast(isTaskRecording(transcript) ? 'נשמר ✓ — נשלח לצלול בעוד רגע' : 'נשמר ✓ — ייכנס לכספת בעוד רגע', 2200);
+  toast(isTaskRecording(transcript) ? 'נשמר ✓ — נשלח לצלול בעוד רגע' : isReminderRecording(transcript) ? 'נשמר ✓ — קובע תזכורת…' : 'נשמר ✓ — ייכנס לכספת בעוד רגע', 2200);
   await renderHome().catch(() => { });
   show('home');
   if (state.fromWidget) { state.fromWidget = false; setTimeout(() => { try { AppP.minimizeApp(); } catch { } }, 700); }
@@ -489,6 +493,11 @@ async function processPending() {
     if (!pending.length) return;
     const map = await buildVaultMap();
     for (const d of pending) {
+      if (isReminderRecording(d.transcript)) {
+        try { const r = await createReminder(d); await deleteDraft(d); await confirmReminder(r); }
+        catch (e) { d.error = e.message; d.route = 'reminder'; await saveDraft(d).catch(() => { }); }
+        continue;
+      }
       if (isTaskRecording(d.transcript)) {
         try { const sent = await sendToTzalul(d); await deleteDraft(d); toast(sent.length === 1 ? 'משימה נכנסה לצלול' : `${sent.length} משימות נכנסו לצלול`, 2500); }
         catch (e) { d.error = e.message; d.route = 'tzalul'; await saveDraft(d).catch(() => { }); }
@@ -778,6 +787,126 @@ async function renderDictionary() {
 }
 
 
+
+
+/* ===================== תזכורות ===================== */
+function isReminderRecording(t) { return /^\s*(תזכיר|תזכירי|תזכרי|תזכורת|הזכר|להזכיר|תזכור)[\s:,.\-–—]/.test(String(t) + ' '); }
+
+const REMINDER_PROMPT = `אתה ממיר הקלטה קולית לתזכורת בטלפון.
+החזר JSON בלבד: {"at":"YYYY-MM-DDTHH:MM","title":"","body":""}
+כללים:
+- at: הזמן המקומי (שעון ישראל) שבו להזכיר. חשב לפי התאריך והשעה הנוכחיים שתקבל.
+- שעה בלי "בבוקר/בצהריים/בערב/בלילה" (למשל "ב-2:40"): בחר את המועד הקרוב ביותר בעתיד מבין שתי האפשרויות (02:40 או 14:40). אם שתיהן עברו היום — מחר.
+- "בעוד רבע שעה", "בעוד שעתיים", "מחר בבוקר" (= 08:00), "בערב" (= 20:00), "יום חמישי ב-10" — חשב בהתאם.
+- אם נאמר יום בלי שעה — 09:00 באותו יום.
+- title: מה להזכיר, קצר ובלשונו, בלי "תזכיר לי" ובלי הזמן ("השיחה עם נועה אלזס").
+- body: פרטים נוספים שאמר, אם יש. אחרת ריק.
+- אם לא נאמר שום זמן — at ריק.`;
+
+async function parseReminder(transcript) {
+  const days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+  const now = new Date();
+  const user = `עכשיו: יום ${days[now.getDay()]}, ${isoDate(now)}, השעה ${pad(now.getHours())}:${pad(now.getMinutes())}\n${await personalContext()}\nההקלטה:\n"""\n${transcript}\n"""`;
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': state.apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+    body: JSON.stringify({ model: state.model, max_tokens: 400, system: REMINDER_PROMPT, messages: [{ role: 'user', content: user }] }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(res.status === 401 ? 'המפתח לא תקין או שפג תוקפו' : 'שגיאה מ-Claude: ' + (data?.error?.message || res.status));
+  const txt = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+  const m = txt.match(/\{[\s\S]*\}/);
+  return m ? JSON.parse(m[0]) : {};
+}
+
+/** "2026-11-19T14:40" → Date בשעון המכשיר; אם יצא בעבר — מקדמים ב-12 שעות (עד פעמיים). */
+function reminderDate(at) {
+  const m = String(at || '').match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], 0, 0);
+  for (let i = 0; i < 2 && d.getTime() < Date.now() - 60000; i++) d.setTime(d.getTime() + 12 * 3600e3);
+  return d.getTime() < Date.now() - 60000 ? null : d;
+}
+
+function reminderWhen(t) {
+  const d = new Date(t), now = new Date();
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const day0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const diff = Math.floor((new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - day0) / 864e5);
+  const days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+  if (diff === 0) return 'היום ב-' + hm;
+  if (diff === 1) return 'מחר ב-' + hm;
+  if (diff === -1) return 'אתמול ב-' + hm;
+  if (diff > 1 && diff < 7) return `יום ${days[d.getDay()]} ב-${hm}`;
+  return `${d.getDate()}.${d.getMonth() + 1} ב-${hm}`;
+}
+
+let remReady = null;
+async function setupReminders() {
+  if (remReady) return remReady;
+  remReady = (async () => {
+    let p = await Notif.checkPermissions();
+    if (p.display !== 'granted') p = await Notif.requestPermissions();
+    try {
+      await Notif.createChannel({ id: 'reminders', name: 'תזכורות', description: 'תזכורות שהקלטת בהגיגית', importance: 5, visibility: 1, vibration: true });
+      await Notif.createChannel({ id: 'confirm', name: 'אישור תזכורת', description: 'הודעה שקטה שהתזכורת נקבעה', importance: 2, visibility: 1, vibration: false });
+    } catch { }
+    return p.display === 'granted';
+  })().catch((e) => { remReady = null; throw e; });
+  return remReady;
+}
+
+function notifErr(e) {
+  const m = String(e?.message || e);
+  return /not implemented|not available|unimplemented/i.test(m) ? 'צריך להתקין את הגרסה החדשה של הגיגית (APK) כדי לקבוע תזכורות' : 'לא הצלחתי לקבוע תזכורת: ' + m;
+}
+
+async function createReminder(d) {
+  let ok;
+  try { ok = await setupReminders(); } catch (e) { throw new Error(notifErr(e)); }
+  if (!ok) throw new Error('הגיגית צריכה הרשאה להתראות — אשר אותה בהגדרות הטלפון');
+  const r = await parseReminder(d.transcript);
+  const when = reminderDate(r.at);
+  if (!when) throw new Error('לא הבנתי מתי להזכיר — הקלט שוב עם שעה');
+  const notifId = Math.floor(Date.now() / 1000) % 2000000000;
+  const title = (r.title || d.transcript).trim();
+  try {
+    await Notif.schedule({ notifications: [{ id: notifId, title: '⏰ ' + title, body: r.body || reminderWhen(when.getTime()), channelId: 'reminders',
+      smallIcon: 'ic_stat_hagigit', iconColor: '#4886D8', schedule: { at: when, allowWhileIdle: true } }] });
+  } catch (e) { throw new Error(notifErr(e)); }
+  const rem = { id: d.id, notifId, at: when.getTime(), title, body: r.body || '', transcript: d.transcript, created: new Date().toISOString() };
+  const list = await readJSON('reminders');
+  list.push(rem);
+  await writeJSON('reminders', list.filter(x => x.at > Date.now() - 7 * 864e5));
+  return rem;
+}
+
+/** אישור: הודעה קצרה בתוך האפליקציה, או התראה שקטה אם האפליקציה כבר ממוזערת. */
+async function confirmReminder(r) {
+  const msg = `תזכורת ${reminderWhen(r.at)}: ${r.title}`;
+  let active = true;
+  try { active = (await AppP.getState()).isActive; } catch { }
+  if (active) { toast(msg, 4000); return; }
+  try { await Notif.schedule({ notifications: [{ id: (r.notifId + 1) % 2000000000, title: 'נקבעה ' + msg.replace(/^תזכורת/, 'תזכורת'), body: '', channelId: 'confirm', smallIcon: 'ic_stat_hagigit', iconColor: '#4886D8' }] }); } catch { }
+}
+
+async function deleteReminder(r) {
+  try { await Notif.cancel({ notifications: [{ id: r.notifId }] }); } catch { }
+  const list = await readJSON('reminders');
+  await writeJSON('reminders', list.filter(x => x.id !== r.id));
+}
+
+async function renderReminders(list) {
+  const all = (await readJSON('reminders')).filter(x => x.at > Date.now() - 864e5);
+  const up = all.filter(x => x.at >= Date.now()).sort((a, b) => a.at - b.at);
+  const past = all.filter(x => x.at < Date.now()).sort((a, b) => b.at - a.at);
+  for (const r of [...up, ...past]) {
+    const c = document.createElement('div'); c.className = 'task-card rem-card' + (r.at < Date.now() ? ' past' : '');
+    c.innerHTML = `<div class="top"><span class="rem-when">${esc(reminderWhen(r.at))}</span><button class="rem-del" aria-label="מחק תזכורת">✕</button></div><div class="rem-t">${esc(r.title)}</div>${r.body ? `<div class="ex">${esc(r.body)}</div>` : ''}`;
+    c.querySelector('.rem-del').onclick = async () => { await deleteReminder(r); toast('התזכורת נמחקה'); renderHome(); };
+    list.appendChild(c);
+  }
+}
 
 /* ===================== צלול ===================== */
 const TZ = { apiKey: 'AIzaSyA2tDkYASuqqOnUiR19EqBu7QiaT7NgpxY', project: 'tzalul-b75d5' };
@@ -1229,6 +1358,7 @@ function wire() {
   $('btn-review').onclick = openReview;
   $('tab-notes').onclick = () => { state.tab = 'notes'; renderHome(); };
   $('tab-tasks').onclick = () => { state.tab = 'tasks'; renderHome(); };
+  $('tab-rem').onclick = () => { state.tab = 'rem'; renderHome(); };
   $('btn-tz-login').onclick = async () => {
     const em = $('tz-email').value.trim(), pw = $('tz-pass').value;
     if (!em || !pw) { toast('צריך אימייל וסיסמה'); return; }
@@ -1334,6 +1464,7 @@ async function init() {
     }
   } catch { }
   try { await withTimeout(renderHome(), 8000, 'מסך הבית'); } catch (e) { showError('מסך הבית', e); }
+  setupReminders().catch(() => { });
   processPending();
   try { const l = await withTimeout(AppP.getLaunchUrl(), 3000, 'קישור'); if (l && l.url) handleUrl(l.url); } catch { }
 }
