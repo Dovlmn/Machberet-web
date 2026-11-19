@@ -226,3 +226,12 @@ input, select, textarea { border: 0; border-radius: 4px; }
 .rem-del svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 #reminder .content { display: flex; flex-direction: column; gap: 8px; }
 .rem-origd { margin-top: 12px; font-size: 13px; }
+
+.sent-ok { color: #1E8E5A; font-weight: 500; }
+.task-item { align-items: flex-start; }
+.task-item .box { margin-top: 4px; }
+.task-item .ti { flex: 1; min-width: 0; }
+.task-item .tt { font-size: 15px; }
+.task-item .where { font-size: 12px; color: var(--teal-dark); margin-top: 2px; }
+.ti-del { border: 0; background: transparent; color: var(--muted); width: 30px; height: 26px; flex: none; }
+.ti-del svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }

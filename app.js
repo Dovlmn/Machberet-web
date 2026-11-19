@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-19.3';
+const WEB_VERSION = '2026-11-19.4';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -288,16 +288,31 @@ async function renderHome() {
   for (const d of state.drafts.filter(d => draftTab(d) === tab)) {
     const b = document.createElement('button');
     b.className = (tab === 'tasks' ? 'task-card' : 'note-card') + (d.error ? ' err' : '');
-    b.innerHTML = `<div class="top"><span>${esc(d.error ? 'עוד לא נשלח — ינסה שוב: ' + d.error : 'בעיבוד…')}</span></div><div class="ex">${esc(d.transcript)}</div>`;
+    const pend = tab === 'tasks' ? '⏳ נשלח לצלול…' : tab === 'rem' ? '⏳ קובע תזכורת…' : 'בעיבוד…';
+    b.innerHTML = `<div class="top"><span>${esc(d.error ? (tab === 'tasks' ? '✕ לא נשלח לצלול — ' : 'עוד לא הצליח — ') + d.error + ' · הקש לניסיון חוזר' : pend)}</span></div><div class="ex">${esc(d.transcript)}</div>`;
     b.onclick = () => processPending();
     list.appendChild(b);
   }
   if (tab === 'tasks') {
-    const tl = (await readJSON('taskLog')).filter(x => Date.now() - new Date(x.inserted).getTime() < 7 * 864e5).sort((a, b) => b.inserted.localeCompare(a.inserted));
+    const all = await readJSON('taskLog');
+    const tl = all.filter(x => Date.now() - new Date(x.inserted).getTime() < 7 * 864e5).sort((a, b) => b.inserted.localeCompare(a.inserted));
     for (const x of tl) {
+      const shown = x.tasks.map((t, i) => ({ t, i })).filter(o => !o.t.hidden);
+      if (!shown.length) continue;
       const c = document.createElement('div'); c.className = 'task-card';
-      c.innerHTML = `<div class="top"><span>${esc(whenText(x.inserted))}</span><span>${x.tasks.length === 1 ? 'משימה אחת' : x.tasks.length + ' משימות'}</span></div>` +
-        x.tasks.map(t => `<div class="task-item"><span class="box"></span><span>${esc(t.title)}</span>${t.due ? `<span class="due">עד ${esc(t.due.split('-').reverse().slice(0, 2).join('.'))}</span>` : ''}<span class="lst">${esc(t.project || TZ_LISTS[t.list] || '')}</span></div>`).join('');
+      c.innerHTML = `<div class="top"><span class="sent-ok">✓ נכנס לצלול</span><span>${esc(whenText(x.inserted))}</span></div>`;
+      for (const { t, i } of shown) {
+        const where = [t.project ? 'פרויקט ' + t.project : '', TZ_LISTS[t.list] || '', t.due ? 'עד ' + t.due.split('-').reverse().slice(0, 2).join('.') : ''].filter(Boolean).join(' · ');
+        const row = document.createElement('div'); row.className = 'task-item';
+        row.innerHTML = `<span class="box"></span><div class="ti"><div class="tt">${esc(t.title)}</div><div class="where">${esc(where)}</div></div>
+          <button class="ti-del" aria-label="הסרה מהרשימה"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`;
+        row.querySelector('.ti-del').onclick = async () => {
+          const log = await readJSON('taskLog'); const e = log.find(z => z.id === x.id && z.inserted === x.inserted);
+          if (e && e.tasks[i]) e.tasks[i].hidden = true;
+          await writeJSON('taskLog', log); renderHome();
+        };
+        c.appendChild(row);
+      }
       list.appendChild(c);
     }
     $('drawer-empty').textContent = 'עוד לא נשלחו משימות השבוע. התחל הקלטה במילה "משימה".';
@@ -1060,7 +1075,7 @@ async function sendToTzalul(d) {
       headers: { authorization: 'Bearer ' + a.token, 'content-type': 'application/json' },
       body: JSON.stringify({ fields: Object.fromEntries(Object.entries(item).map(([x, v]) => [x, toFs(v)])) }) });
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error('הכתיבה לצלול נכשלה: ' + (e?.error?.message || r.status)); }
-    sent.push({ title: t.title, list: t.list, due: t.due || '', project: proj ? proj.title : '' });
+    sent.push({ id, title: t.title, list: t.list, due: t.due || '', project: proj ? proj.title : '' });
   }
   const log = await readJSON('taskLog');
   log.push({ id: d.id, created: d.created, inserted: new Date().toISOString(), transcript: d.transcript, tasks: sent });
