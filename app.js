@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-15.9';
+const WEB_VERSION = '2026-11-19.1';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -45,7 +45,7 @@ async function listNotes(folder = '') { try { return (await Vault.listNotes({ fo
 
 /** מפת הכספת ל-Claude: כותרות לפי תיקייה, כותרות-משנה בדפי מקור וקורס, ותגיות קיימות. */
 async function buildVaultMap() {
-  const files = (await listNotes()).filter(f => !f.path.startsWith('_מחברת'));
+  const files = (await listNotes()).filter(f => !f.path.startsWith('_'));
   const map = { sources: [], ideas: [], courses: [], gates: [], other: [], tags: new Set() };
   for (const f of files.slice(0, 400)) {
     const parts = f.path.split('/');
@@ -450,12 +450,40 @@ async function processTranscript(transcript) {
   processPending();
 }
 
+
+/* ===================== קליטה מהאייפד ===================== */
+const IPAD_INBOX = '_הגיגית/מהאייפד.md';
+const IPAD_MARK = /^<<הגיגית(?:\s+([^>]*))?>>\s*$/;
+
+/** קורא את קובץ הקליטה שקיצור הדרך באייפד מוסיף אליו, הופך כל קטע להקלטה, ומרוקן את הקובץ. */
+async function pullIpadInbox() {
+  const content = await readNote(IPAD_INBOX);
+  if (!content || !content.trim()) return 0;
+  const entries = []; let cur = null;
+  for (const line of content.split('\n')) {
+    const m = line.trim().match(IPAD_MARK);
+    if (m) { if (cur && cur.text.trim()) entries.push(cur); cur = { when: m[1] || '', text: '' }; }
+    else if (cur) cur.text += line + '\n';
+    else if (line.trim()) { cur = { when: '', text: line + '\n' }; }
+  }
+  if (cur && cur.text.trim()) entries.push(cur);
+  if (!entries.length) return 0;
+  let n = 0;
+  for (const e of entries) {
+    const d = { id: stamp() + '-' + (n++), created: new Date().toISOString(), transcript: e.text.trim(), proposal: null, error: null, from: 'ipad' };
+    await saveDraft(d);
+  }
+  await writeNote(IPAD_INBOX, '');
+  return n;
+}
+
 let processing = false;
 /** מעבד ברקע כל טיוטה שעוד לא נערכה (גם כאלה שנשארו מפעם קודמת, למשל בלי רשת). */
 async function processPending() {
   if (processing || !state.apiKey) return;
   processing = true;
   try {
+    try { const n = await pullIpadInbox(); if (n) toast(n === 1 ? 'הגיעה הקלטה מהאייפד' : `הגיעו ${n} הקלטות מהאייפד`, 2500); } catch { }
     const drafts = await loadDrafts();
     const pending = drafts.filter(d => !d.proposal);
     if (!pending.length) return;
