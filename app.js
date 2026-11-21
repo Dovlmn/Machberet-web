@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-19.4';
+const WEB_VERSION = '2026-11-21.1';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -868,6 +868,7 @@ async function setupReminders() {
       await Notif.createChannel({ id: 'reminders', name: 'תזכורות', description: 'תזכורות שהקלטת בהגיגית', importance: 5, visibility: 1, vibration: true });
       await Notif.createChannel({ id: 'confirm', name: 'אישור תזכורת', description: 'הודעה שקטה שהתזכורת נקבעה', importance: 2, visibility: 1, vibration: false });
     } catch { }
+    if (p.display === 'granted') await scheduleWeeklyReview().catch(() => { });
     return p.display === 'granted';
   })().catch((e) => { remReady = null; throw e; });
   return remReady;
@@ -904,6 +905,14 @@ async function confirmReminder(r) {
   try { active = (await AppP.getState()).isActive; } catch { }
   if (active) { toast(msg, 4000); return; }
   try { await Notif.schedule({ notifications: [{ id: (r.notifId + 1) % 2000000000, title: 'נקבעה ' + msg.replace(/^תזכורת/, 'תזכורת'), body: '', channelId: 'confirm', smallIcon: 'ic_stat_hagigit', iconColor: '#4886D8' }] }); } catch { }
+}
+
+/* תזכורת קבועה לסקירה השבועית: מוצאי שבת 21:00 (אותו מזהה — מחליף ולא מכפיל) */
+const REVIEW_NOTIF_ID = 1999999901;
+async function scheduleWeeklyReview() {
+  await Notif.schedule({ notifications: [{ id: REVIEW_NOTIF_ID, title: 'סקירה שבועית', body: 'הגיע הזמן לעבור על הגיגי השבוע', channelId: 'reminders',
+    smallIcon: 'ic_stat_hagigit', iconColor: '#4886D8', extra: { action: 'review' },
+    schedule: { on: { weekday: 7, hour: 21, minute: 0 }, allowWhileIdle: true } }] });
 }
 
 async function scheduleReminder(r) {
@@ -1488,6 +1497,7 @@ function wire() {
     if (active === 'note' && nt.editing) { nt.editing = false; renderNote(); return; }
     await renderHome(); show('home');
   });
+  try { Notif.addListener('localNotificationActionPerformed', (ev) => { if (ev?.notification?.extra?.action === 'review') openReview(); }); } catch { }
   AppP.addListener('resume', () => { if (document.querySelector('.screen.active')?.id === 'home') renderHome(); processPending(); });
   } catch (e) { showError('אירועי מערכת', e); }
 }
