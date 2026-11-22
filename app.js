@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-21.1';
+const WEB_VERSION = '2026-11-22.1';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -908,11 +908,46 @@ async function confirmReminder(r) {
 }
 
 /* תזכורת קבועה לסקירה השבועית: מוצאי שבת 21:00 (אותו מזהה — מחליף ולא מכפיל) */
-const REVIEW_NOTIF_ID = 1999999901;
+const REVIEW_NOTIF_ID = 1999999901, REVIEW_SNOOZE_ID = 1999999902;
+const reviewNotif = (extra) => ({ title: 'סקירה שבועית', body: 'הגיע הזמן לעבור על הגיגי השבוע', channelId: 'reminders',
+  smallIcon: 'ic_stat_hagigit', iconColor: '#4886D8', actionTypeId: 'review', extra: { action: 'review' }, ...extra });
 async function scheduleWeeklyReview() {
-  await Notif.schedule({ notifications: [{ id: REVIEW_NOTIF_ID, title: 'סקירה שבועית', body: 'הגיע הזמן לעבור על הגיגי השבוע', channelId: 'reminders',
-    smallIcon: 'ic_stat_hagigit', iconColor: '#4886D8', extra: { action: 'review' },
-    schedule: { on: { weekday: 7, hour: 21, minute: 0 }, allowWhileIdle: true } }] });
+  try {
+    await Notif.registerActionTypes({ types: [{ id: 'review', actions: [
+      { id: 'snooze1h', title: 'בעוד שעה' }, { id: 'tomorrow', title: 'מחר ב-21:00' }, { id: 'other', title: 'מועד אחר…' }] }] });
+  } catch { }
+  await Notif.schedule({ notifications: [reviewNotif({ id: REVIEW_NOTIF_ID, schedule: { on: { weekday: 7, hour: 21, minute: 0 }, allowWhileIdle: true } })] });
+}
+
+/** דחיית הסקירה למועד מסוים (התראה חד-פעמית, עם אותם כפתורי דחייה). */
+async function snoozeReview(at, fromNotif) {
+  try { await Notif.cancel({ notifications: [{ id: REVIEW_SNOOZE_ID }] }); } catch { }
+  await Notif.schedule({ notifications: [reviewNotif({ id: REVIEW_SNOOZE_ID, body: 'דחית את הסקירה לעכשיו', schedule: { at: new Date(at), allowWhileIdle: true } })] });
+  toast('הסקירה נדחתה: ' + reminderWhen(at), 2500);
+  if (fromNotif) setTimeout(() => { try { AppP.minimizeApp(); } catch { } }, 1200);
+}
+function at2100(daysAhead) { const d = new Date(); d.setDate(d.getDate() + daysAhead); d.setHours(21, 0, 0, 0); return d.getTime(); }
+function at0900(daysAhead) { const d = new Date(); d.setDate(d.getDate() + daysAhead); d.setHours(9, 0, 0, 0); return d.getTime(); }
+
+async function onReviewNotif(actionId) {
+  if (actionId === 'snooze1h') return snoozeReview(Date.now() + 3600e3, true);
+  if (actionId === 'tomorrow') return snoozeReview(at2100(1), true);
+  if (actionId === 'other') return openSnoozeScreen();
+  if (actionId === 'dismiss') return;
+  return openReview();
+}
+
+function openSnoozeScreen() {
+  const opts = [['בעוד שעתיים', Date.now() + 2 * 3600e3], ['מחר ב-9:00', at0900(1)], ['מחר ב-21:00', at2100(1)], ['בעוד יומיים ב-21:00', at2100(2)], ['בעוד שבוע', at2100(7)]];
+  const box = $('snooze-opts'); box.innerHTML = '';
+  for (const [label, at] of opts) {
+    const b = document.createElement('button'); b.className = 'btn ghost'; b.textContent = label;
+    b.onclick = async () => { await snoozeReview(at, false); await renderHome(); show('home'); };
+    box.appendChild(b);
+  }
+  const t = new Date(at2100(1));
+  $('snooze-date').value = isoDate(t); $('snooze-time').value = '21:00';
+  show('snooze');
 }
 
 async function scheduleReminder(r) {
@@ -1283,6 +1318,7 @@ ${JSON.stringify(notes)}`;
 }
 
 async function openReview() {
+  try { Notif.cancel({ notifications: [{ id: REVIEW_SNOOZE_ID }] }); } catch { }
   if (!(await vaultReady())) { toast('קודם בחר את תיקיית הכספת בהגדרות'); return; }
   try { const n = await scanObsidianEdits(); if (n) toast(n === 1 ? 'למדתי מתיקון אחד שעשית באובסידיאן' : `למדתי מ-${n} תיקונים שעשית באובסידיאן`, 3500); } catch { }
   rv.entries = (await loadLog(7)).filter(e => !e.reviewed);
@@ -1427,6 +1463,14 @@ function wire() {
   $('tab-rem').onclick = () => { state.tab = 'rem'; renderHome(); };
   $('btn-rem-back').onclick = async () => { remEdit = null; await renderHome(); show('home'); };
   $('btn-rem-save').onclick = saveReminder;
+  $('btn-snooze-back').onclick = async () => { await renderHome(); show('home'); };
+  $('btn-snooze-now').onclick = () => openReview();
+  $('btn-snooze-save').onclick = async () => {
+    const [y, mo, da] = $('snooze-date').value.split('-').map(Number); const [h, mi] = $('snooze-time').value.split(':').map(Number);
+    const at = new Date(y, mo - 1, da, h, mi, 0, 0);
+    if (isNaN(at) || at.getTime() < Date.now()) { toast('המועד שבחרת כבר עבר'); return; }
+    await snoozeReview(at.getTime(), false); await renderHome(); show('home');
+  };
   $('btn-rem-delete').onclick = async () => { if (!remEdit) return; await deleteReminder(remEdit); remEdit = null; toast('התזכורת נמחקה'); await renderHome(); show('home'); };
   $('btn-rem-sound').onclick = openNotifSettings;
   $('btn-notif-settings').onclick = openNotifSettings;
@@ -1497,7 +1541,7 @@ function wire() {
     if (active === 'note' && nt.editing) { nt.editing = false; renderNote(); return; }
     await renderHome(); show('home');
   });
-  try { Notif.addListener('localNotificationActionPerformed', (ev) => { if (ev?.notification?.extra?.action === 'review') openReview(); }); } catch { }
+  try { Notif.addListener('localNotificationActionPerformed', (ev) => { if (ev?.notification?.extra?.action === 'review') onReviewNotif(ev.actionId); }); } catch { }
   AppP.addListener('resume', () => { if (document.querySelector('.screen.active')?.id === 'home') renderHome(); processPending(); });
   } catch (e) { showError('אירועי מערכת', e); }
 }

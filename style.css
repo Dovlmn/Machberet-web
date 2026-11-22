@@ -235,3 +235,6 @@ input, select, textarea { border: 0; border-radius: 4px; }
 .task-item .where { font-size: 12px; color: var(--teal-dark); margin-top: 2px; }
 .ti-del { border: 0; background: transparent; color: var(--muted); width: 30px; height: 26px; flex: none; }
 .ti-del svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+
+#snooze .content { display: flex; flex-direction: column; gap: 10px; }
+.snooze-opts { display: flex; flex-direction: column; gap: 8px; }
