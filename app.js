@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-22.1';
+const WEB_VERSION = '2026-11-24.1';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -1190,7 +1190,8 @@ function startNoteEdit() {
   $('note-title-in').value = nt.e.title || '';
   $('note-text-in').value = nt.e.text || '';
   renderNote();
-  setTimeout(() => $('note-text-in').focus(), 100);
+  // בלי focus אוטומטי: ב-WebView של אנדרואיד הוא מקבע אצל המקלדת את הסמן בסוף הטקסט,
+  // ואז מילים שמוקלדות באמצע נכנסות בסוף. נותנים לך להקיש בעצמך במקום שרוצים לתקן.
 }
 
 async function deleteNote() {
