@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-24.1';
+const WEB_VERSION = '2026-11-24.2';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -252,9 +252,14 @@ async function writeLog(d, path) {
     title: p.title, text: p.text, tags: p.tags, links: p.links.filter(l => l.accepted).map(l => ({ title: l.title, reason: l.reason })),
     suggested: p.links.filter(l => !l.accepted).map(l => ({ title: l.title, reason: l.reason })), newTag: p.newTag, why: p.why, transcript: d.transcript, reviewed: false };
   const cutoff = Date.now() - 60 * 864e5;
-  const all = (await readJSON('log')).filter(x => new Date(x.inserted).getTime() >= cutoff && x.id !== entry.id);
+  // הערה שעוד לא נסקרה נשמרת תמיד — עד הסקירה הבאה, גם אם עברו שבועות
+  const all = (await readJSON('log')).filter(x => (!x.reviewed || new Date(x.inserted).getTime() >= cutoff) && x.id !== entry.id);
   all.push(entry);
   await writeJSON('log', all);
+}
+/** כל מה שנכנס מאז הסקירה הקודמת — בלי הגבלת זמן. */
+async function loadUnreviewed() {
+  return (await readJSON('log')).filter(e => !e.reviewed).sort((a, b) => (b.inserted || '').localeCompare(a.inserted || ''));
 }
 async function loadLog(days = 7) {
   const since = Date.now() - days * 864e5;
@@ -279,7 +284,7 @@ async function renderHome() {
   const n = state.log.length;
   $('drawer-count').textContent = n ? (n === 1 ? 'הערה אחת השבוע' : `${n} הערות השבוע`) : '';
   $('drawer-empty').classList.toggle('hidden', state.drafts.length + n > 0);
-  const pendingReview = state.log.filter(e => !e.reviewed).length;
+  const pendingReview = (await loadUnreviewed()).length;
   $('review-sub').textContent = pendingReview ? (pendingReview === 1 ? 'הערה אחת מחכה לסקירה' : `${pendingReview} הערות מחכות לסקירה`) : 'הכול נסקר';
   const tab = state.tab || 'notes';
   for (const t of ['notes', 'tasks', 'rem']) { $('tab-' + t).classList.toggle('on', tab === t); $('tab-' + t).setAttribute('aria-selected', tab === t); }
@@ -1285,7 +1290,7 @@ async function rewriteEntry(e, changes) {
   return ne;
 }
 
-const REVIEW_PROMPT = `אתה עוזר למשתמש בסקירה שבועית של ההערות שהקליט השבוע ונכנסו לכספת אובסידיאן שלו (שיטת תיבת הפתקים של זונקה אהרנס).
+const REVIEW_PROMPT = `אתה עוזר למשתמש בסקירה שבועית של ההערות שהקליט מאז הסקירה הקודמת (בדרך כלל שבוע, לפעמים יותר) ונכנסו לכספת אובסידיאן שלו (שיטת תיבת הפתקים של זונקה אהרנס).
 קבל את רשימת ההערות של השבוע ואת מפת הכספת, והחזר JSON בלבד:
 {"threads":[{"title":"","ids":[],"why":"","draft":""}],"moves":[{"id":"","kind":"source|course|idea","target":"","section":"","why":""}],"links":[{"id":"","title":"","reason":""}],"summary":""}
 
@@ -1322,7 +1327,7 @@ async function openReview() {
   try { Notif.cancel({ notifications: [{ id: REVIEW_SNOOZE_ID }] }); } catch { }
   if (!(await vaultReady())) { toast('קודם בחר את תיקיית הכספת בהגדרות'); return; }
   try { const n = await scanObsidianEdits(); if (n) toast(n === 1 ? 'למדתי מתיקון אחד שעשית באובסידיאן' : `למדתי מ-${n} תיקונים שעשית באובסידיאן`, 3500); } catch { }
-  rv.entries = (await loadLog(7)).filter(e => !e.reviewed);
+  rv.entries = await loadUnreviewed();
   rv.analysis = null;
   $('review-range').textContent = weekRange();
   show('review');
@@ -1350,14 +1355,14 @@ function renderReview() {
     ${Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<div><div class="rv-row"><span>${esc(k)}</span><span>${n}</span></div><div class="rv-bar"><span style="width:${Math.round(n / max * 100)}%"></span></div></div>`).join('')}`;
   box.appendChild(sum);
 
-  if (!rv.analysis) { const l = document.createElement('div'); l.className = 'rv-loading'; l.textContent = state.apiKey ? 'Claude עובר על השבוע…' : ''; box.appendChild(l); }
+  if (!rv.analysis) { const l = document.createElement('div'); l.className = 'rv-loading'; l.textContent = state.apiKey ? 'Claude עובר על ההערות מאז הסקירה הקודמת…' : ''; box.appendChild(l); }
   else if (rv.analysis.error) { const l = document.createElement('div'); l.className = 'rv-loading'; l.textContent = 'הניתוח לא הצליח: ' + rv.analysis.error; box.appendChild(l); }
 
   // חוטים
   for (const t of (rv.analysis?.threads || [])) {
     if (t.done) continue;
     const c = document.createElement('div'); c.className = 'rv-card rv-thread';
-    c.innerHTML = `<div class="rv-dest">חוט שחזר השבוע</div><h3>${esc(t.title)}</h3><div class="rv-why">${esc(t.why || '')}</div>
+    c.innerHTML = `<div class="rv-dest">חוט שחזר</div><h3>${esc(t.title)}</h3><div class="rv-why">${esc(t.why || '')}</div>
       <textarea aria-label="טיוטת הערה לגינה">${esc(t.draft || '')}</textarea>
       <div class="rv-actions"><button class="sbtn primary">יצירת הערה בגינה</button><button class="sbtn">לא עכשיו</button></div>`;
     const [mk, skip] = c.querySelectorAll('button');
