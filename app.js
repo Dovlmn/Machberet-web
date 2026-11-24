@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-24.4';
+const WEB_VERSION = '2026-11-24.5';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -1305,14 +1305,34 @@ async function rewriteEntry(e, changes) {
   const ne = { ...e, ...changes };
   ne.path = await insertEntry(ne);
   await updateLogEntry(ne);
+  const from = linkName(e), to = linkName(ne);
+  if (from !== to) await relinkVault(from, to).catch(() => { });
   return ne;
+}
+
+/** כשהערה עוברת או נמחקת: מעדכן קישורים אליה בהערות אחרות ([[ישן]] → [[חדש]]); במחיקה — מסיר את שורת הקישור. */
+async function relinkVault(from, to) {
+  if (!from) return 0;
+  const esc2 = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp('\\[\\[' + esc2 + '(\\|[^\\]]*)?\\]\\]', 'g');
+  let n = 0;
+  for (const folder of [FOLDERS.idea, FOLDERS.journal, FOLDERS.inbox, FOLDERS.gate, FOLDERS.source, FOLDERS.course]) {
+    for (const f of await listNotes(folder)) {
+      const c = await readNote(f.path); if (!c || !c.includes('[[' + from)) continue;
+      re.lastIndex = 0; if (!re.test(c)) continue; re.lastIndex = 0;
+      const out = to ? c.replace(re, (m, alias) => '[[' + to + (alias || '') + ']]')
+        : c.split('\n').filter(l => !(/^\s*-\s*\[\[/.test(l) && (re.lastIndex = 0, re.test(l)))).join('\n').replace(re, from);
+      if (out !== c) { await writeNote(f.path, out); n++; }
+    }
+  }
+  return n;
 }
 
 const REVIEW_PROMPT = `אתה עוזר למשתמש בסקירה שבועית של ההערות שהקליט מאז הסקירה הקודמת (בדרך כלל שבוע, לפעמים יותר) ונכנסו לכספת אובסידיאן שלו (שיטת תיבת הפתקים של זונקה אהרנס).
 קבל את רשימת ההערות של השבוע ואת מפת הכספת, והחזר JSON בלבד:
 {"threads":[{"title":"","ids":[],"why":"","draft":""}],"moves":[{"id":"","kind":"source|course|idea|journal","target":"","section":"","why":""}],"links":[{"id":"","title":"","reason":""}],"summary":""}
 
-- threads: רעיון שחזר ביותר מהערה אחת השבוע (גם במקורות שונים), או תובנה כללית שהתגבשה בתוך רשומת יומן אחת וראויה להערה עצמאית בגינה (אז ids = אותה רשומה). title = הרעיון כמשפט קצר. draft = טיוטה קצרה (3–6 משפטים) של הערה עצמאית בלשונו של המשתמש, שמגבשת את החוט — רק ממה שכתוב בהערות, בלי להוסיף תוכן. אם אין חוט אמיתי — מערך ריק. עד 2.
+- threads: רעיון שחזר ביותר מהערה אחת השבוע (גם במקורות שונים). ids = כל ההערות שבהן הרעיון מופיע. draft = הערה חדשה שמאחדת את מה שנאמר בכל ההערות שב-ids — לא העתקה של אחת מהן — ומנסחת את הרעיון המשותף. או תובנה כללית שהתגבשה בתוך רשומת יומן אחת וראויה להערה עצמאית בגינה (אז ids = אותה רשומה). title = הרעיון כמשפט קצר. draft = טיוטה קצרה (3–6 משפטים) של הערה עצמאית בלשונו של המשתמש, שמגבשת את החוט — רק ממה שכתוב בהערות, בלי להוסיף תוכן. אם אין חוט אמיתי — מערך ריק. עד 2.
 - moves: רק להערות שנמצאות בזמני (kind=inbox). הצע יעד אם ברור: מקור/קורס קיים מהרשימה (target בדיוק כמו ברשימה), "journal" ליומן אם זה הרהור אישי, או "idea" לגינה אם זו מחשבה עצמאית ומגובשת. אם לא ברור — אל תציע. רשומות יומן לא מעבירים.
 - links: קישור מהערה של השבוע להערה קיימת בכספת (כותרת מדויקת מהרשימה, כולל תאריך ברשומות יומן) שיש ביניהן קשר ממשי. ברשומות יומן חפש גם קישור לגינה וגם לרשומות יומן אחרות — גם בין רשומות של השבוע עצמו. reason = סוג הקשר (מחזק/סותר/מרחיב/מקביל/המשך) ומשפט קצר. עד 8 בסך הכול.
 - summary: משפט אחד על מה עסק השבוע.`;
@@ -1379,28 +1399,60 @@ function renderReview() {
 
   // חוטים
   for (const t of (rv.analysis?.threads || [])) {
-    if (t.done) continue;
-    const c = document.createElement('div'); c.className = 'rv-card rv-thread';
-    c.innerHTML = `<div class="rv-dest">חוט שחזר</div><h3>${esc(t.title)}</h3><div class="rv-why">${esc(t.why || '')}</div>
-      <textarea aria-label="טיוטת הערה לגינה">${esc(t.draft || '')}</textarea>
-      <div class="rv-actions"><button class="sbtn primary">יצירת הערה בגינה</button><button class="sbtn">לא עכשיו</button></div>`;
-    const [mk, skip] = c.querySelectorAll('button');
-    mk.onclick = async () => {
-      const text = c.querySelector('textarea').value.trim(); if (!text) return;
-      const related = E.filter(e => (t.ids || []).includes(e.id));
-      // קישור לשם הקובץ האמיתי (בזמני השם כולל תאריך), כדי שהקישור באובסידיאן לא ייצא שבור
-      const fileName = (e) => e.path ? e.path.split('/').pop().replace(/\.md$/i, '') : e.title;
-      const links = [...new Map(related.map(e => { const title = e.kind === 'source' || e.kind === 'course' ? e.target : fileName(e); return [title, { title, reason: 'מקור החוט' }]; })).values()];
-      const ne = { id: 'thread-' + stamp(), created: new Date().toISOString(), kind: 'idea', title: t.title, text, tags: [], links, transcript: '', why: 'חוט מהסקירה השבועית' };
-      try { ne.path = await insertEntry(ne); ne.inserted = new Date().toISOString(); ne.reviewed = true; await updateLogEntry(ne); t.done = true; toast('נוצרה הערה בגינה'); renderReview(); }
-      catch (e) { toast('לא הצליח: ' + e.message, 4000); }
-    };
-    skip.onclick = () => { t.done = true; renderReview(); };
-    box.appendChild(c);
+    if (t.closed) continue;
+    box.appendChild(threadCard(t, E));
   }
 
   // הערות
   for (const e of E) box.appendChild(reviewCard(e));
+}
+
+const baseName = (e) => e.path ? e.path.split('/').pop().replace(/\.md$/i, '') : e.title;
+const linkName = (e) => e.kind === 'source' || e.kind === 'course' ? e.target : baseName(e);
+
+/** תיבת חוט: מראה את כל ההערות שהחוט נבנה מהן, טיוטה מאחדת, ואחרי היצירה — מה לעשות עם המקורות שבזמני. */
+function threadCard(t, E) {
+  const related = E.filter(e => (t.ids || []).includes(e.id));
+  const c = document.createElement('div'); c.className = 'rv-card rv-thread';
+  if (!t.created) {
+    c.innerHTML = `<div class="rv-dest">חוט שחזר ב${related.length === 1 ? 'הערה אחת' : related.length + ' הערות'}</div><h3>${esc(t.title)}</h3><div class="rv-why">${esc(t.why || '')}</div>
+      <div class="th-src-label">ההערות שהחוט נבנה מהן:</div>
+      <div class="th-srcs">${related.map(e => `<details class="th-src"><summary><span class="chip-dest ${e.kind}">${esc(shortDest(e))}</span> ${esc(e.title)}</summary><div class="th-src-text">${esc(e.text)}</div></details>`).join('')}</div>
+      <div class="th-src-label">טיוטה של הערה חדשה לגינה, שמאחדת את כולן (אפשר לערוך):</div>
+      <textarea aria-label="טיוטת הערה לגינה">${esc(t.draft || '')}</textarea>
+      <div class="rv-actions"><button class="sbtn primary th-mk">יצירת הערה בגינה</button><button class="sbtn th-skip">לא עכשיו</button></div>
+      <div class="rv-warn hidden"></div>`;
+    c.querySelector('.th-skip').onclick = () => { t.closed = true; renderReview(); };
+    c.querySelector('.th-mk').onclick = async () => {
+      const text = c.querySelector('textarea').value.trim(); if (!text) return;
+      const links = [...new Map(related.map(e => [linkName(e), { title: linkName(e), reason: 'מקור החוט' }])).values()];
+      const ne = { id: 'thread-' + stamp(), created: new Date().toISOString(), kind: 'idea', title: t.title, text, tags: [], links, transcript: '', why: 'חוט מהסקירה' };
+      try { ne.path = await insertEntry(ne); ne.inserted = new Date().toISOString(); ne.reviewed = true; await updateLogEntry(ne); t.created = ne; toast('נוצרה הערה בגינה'); renderReview(); }
+      catch (err) { const w = c.querySelector('.rv-warn'); w.textContent = 'לא הצליח: ' + err.message; w.classList.remove('hidden'); }
+    };
+    return c;
+  }
+  // אחרי היצירה: מה לעשות עם ההערות המקוריות שבזמני
+  const inboxSrc = related.filter(e => e.kind === 'inbox' && !e._threadDone);
+  if (!inboxSrc.length) { t.closed = true; return document.createComment(''); }
+  c.innerHTML = `<div class="rv-dest">✓ נוצרה בגינה: ${esc(t.created.title)}</div>
+    <div class="rv-why">ההערות האלה עדיין בזמני. התוכן שלהן כבר מאוחד בהערה החדשה — מה לעשות איתן? (הקישורים בהערה החדשה יתעדכנו בהתאם)</div>`;
+  for (const e of inboxSrc) {
+    const row = document.createElement('div'); row.className = 'th-row';
+    row.innerHTML = `<div class="th-row-t">${esc(e.title)}</div><div class="rv-actions"><button class="sbtn th-del">מחיקה</button><button class="sbtn th-jr">ליומן</button><button class="sbtn th-keep">להשאיר</button></div>`;
+    const done = (msg) => { e._threadDone = true; toast(msg); renderReview(); };
+    row.querySelector('.th-del').onclick = async () => {
+      try { await removeEntry(e); await dropLogEntry(e); await relinkVault(linkName(e), null); rv.entries = rv.entries.filter(x => x.id !== e.id); done('נמחק מזמני'); }
+      catch (err) { toast(err.message, 4000); }
+    };
+    row.querySelector('.th-jr').onclick = async () => {
+      try { const ne = await rewriteEntry(e, { kind: 'journal', target: '', section: '' }); const i = rv.entries.findIndex(x => x.id === e.id); ne._threadDone = true; rv.entries[i] = ne; done('הועבר ליומן'); }
+      catch (err) { toast(err.message, 4000); }
+    };
+    row.querySelector('.th-keep').onclick = () => done('נשאר בזמני');
+    c.appendChild(row);
+  }
+  return c;
 }
 
 function reviewCard(e) {

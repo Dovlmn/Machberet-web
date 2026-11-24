@@ -239,3 +239,11 @@ input, select, textarea { border: 0; border-radius: 4px; }
 #snooze .content { display: flex; flex-direction: column; gap: 10px; }
 .snooze-opts { display: flex; flex-direction: column; gap: 8px; }
 .chip-dest.journal { background: #F3ECF8; color: #4B2A6B; }
+
+.th-src-label { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.th-srcs { display: flex; flex-direction: column; gap: 6px; }
+.th-src { background: #F6F8FB; border-radius: 4px; padding: 8px 10px; font-size: 14px; }
+.th-src summary { cursor: pointer; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.th-src-text { margin-top: 8px; line-height: 1.6; white-space: pre-wrap; }
+.th-row { border-top: 1px solid #EEF0F3; padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.th-row-t { font-size: 15px; }
