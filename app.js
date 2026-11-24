@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-24.3';
+const WEB_VERSION = '2026-11-24.4';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -10,7 +10,7 @@ const AppP = Cap.registerPlugin('App');
 const Kbd = Cap.registerPlugin('Keyboard');
 const Notif = Cap.registerPlugin('LocalNotifications');
 
-const FOLDERS = { source: 'מקורות', idea: 'הגינה', course: 'קורסים', inbox: 'זמני', gate: 'שערים' };
+const FOLDERS = { source: 'מקורות', idea: 'הגינה', course: 'קורסים', inbox: 'זמני', gate: 'שערים', journal: 'יומן' };
 const DRAWER = '_מחברת/מגירה';
 const LOG = '_מחברת/יומן';
 const STATUS_TAGS = ['לפיתוח', 'לבדוק-מקור', 'לשאלה'];
@@ -47,7 +47,7 @@ async function listNotes(folder = '') { try { return (await Vault.listNotes({ fo
 /** מפת הכספת ל-Claude: כותרות לפי תיקייה, כותרות-משנה בדפי מקור וקורס, ותגיות קיימות. */
 async function buildVaultMap() {
   const files = (await listNotes()).filter(f => !f.path.startsWith('_'));
-  const map = { sources: [], ideas: [], courses: [], gates: [], other: [], tags: new Set() };
+  const map = { sources: [], ideas: [], courses: [], gates: [], journal: [], other: [], tags: new Set() };
   for (const f of files.slice(0, 400)) {
     const parts = f.path.split('/');
     const title = parts[parts.length - 1].replace(/\.md$/i, '');
@@ -62,8 +62,10 @@ async function buildVaultMap() {
     else if (top === FOLDERS.course) map.courses.push({ title, headings: headings.slice(-5) });
     else if (top === FOLDERS.idea) map.ideas.push(title);
     else if (top === FOLDERS.gate) map.gates.push(title);
+    else if (top === FOLDERS.journal) map.journal.push(title);
     else if (top !== FOLDERS.inbox) map.other.push(title);
   }
+  map.journal = map.journal.sort().reverse().slice(0, 80);
   map.tags = [...map.tags].filter(t => !/^\d+$/.test(t)).slice(0, 150);
   return map;
 }
@@ -85,6 +87,7 @@ const SYSTEM_PROMPT = `אתה העורך של הערות קוליות שהמשת
 - "source": ההערה עוסקת בספר או במאמר מסוים. target = שם דף המקור הקיים מהרשימה אם מתאים (בדיוק כפי שהוא), אחרת שם הספר כפי שנאמר. section = פרק/חלק אם הוזכר (למשל "פרק ז׳"), התאם לכותרות קיימות בדף אם יש.
 - "course": רק אם המשתמש הזכיר במפורש קורס/סמינריון/שיעור מהרשימה. target = שם הקורס בדיוק. section ריק.
 - "inbox" (תיקיית זמני): ברירת המחדל לכל הערה שאינה על מקור או קורס מסוים. כל מחשבה כללית נכנסת לכאן, ומשם המשתמש יעביר אותה בסקירה השבועית.
+- "journal" (יומן): הרהור אישי — מה עבר עליו, מה הוא מרגיש או חושב על חייו, על עבודתו ועל עצמו, כשזה לא מחשבה על ספר או קורס מסוים. רוב ההרהורים האישיים הם יומן ולא זמני. title = עיקר ההרהור, 2–7 מילים. target ריק.
 - "idea" (הגינה): רק אם המשתמש אמר במפורש "לגינה", "זה רעיון לגינה" או דומה. title = המחשבה עצמה כמשפט קצר. target ריק.
 - אם המשתמש הזכיר בתחילת ההקלטה שם של ספר, מאמר או קורס מהרשימה (גם בקיצור, למשל מילה ראשונה מהשם) — זו הוראה מפורשת, והיעד הוא אותו מקור.
 - why: משפט קצר אחד שמסביר למה נבחר היעד (למשל: אמרת "בתניא פרק ז׳").
@@ -96,9 +99,10 @@ const SYSTEM_PROMPT = `אתה העורך של הערות קוליות שהמשת
 קשרים:
 - כל קישור שהמשתמש ביקש במפורש: requested=true, title כשם ההערה הקיימת אם יש התאמה, אחרת כפי שנאמר.
 - הצעות שלך: עד 3, רק להערות שמופיעות ברשימות (כותרת מדויקת), ורק אם יש קשר ממשי. reason = סוג הקשר (מחזק / סותר / מרחיב / מקביל) ומשפט קצר למה.
+- ברשומת יומן: חפש קשרים גם להערות בגינה (תובנה שההרהור נוגע בה) וגם לרשומות יומן קודמות (אותו עניין, אותה התלבטות, המשך). השתמש בשם הרשומה בדיוק כפי שהוא ברשימה, כולל התאריך.
 
 החזר JSON בלבד, ללא טקסט נוסף, במבנה:
-{"kind":"source|idea|course|inbox","target":"","section":"","title":"","text":"","tags":[],"newTag":"","links":[{"title":"","reason":"","requested":false}],"why":""}`;
+{"kind":"source|idea|course|inbox|journal","target":"","section":"","title":"","text":"","tags":[],"newTag":"","links":[{"title":"","reason":"","requested":false}],"why":""}`;
 
 /** שם ספר/קורס שנאמר בתחילת ההקלטה הוא הוראה מפורשת — מזהים אותו בקוד, לא משאירים לניחוש. */
 function detectExplicitTarget(transcript, map) {
@@ -126,16 +130,18 @@ function detectExplicitTarget(transcript, map) {
 
 async function callClaude(transcript, map) {
   const explicit = detectExplicitTarget(transcript, map);
+  const isJournal = /^\s*(יומן|ליומן)[\s:,.\-–—]/.test(transcript + ' ');
   if (!state.apiKey) throw new Error('חסר מפתח API — הוסף אותו בהגדרות');
   const user = `רשימות הכספת:
 דפי מקורות (וכותרות בתוכם): ${JSON.stringify(map.sources)}
 קורסים: ${JSON.stringify(map.courses.map(c => c.title))}
 הערות בגינה: ${JSON.stringify(map.ideas)}
+רשומות יומן (האחרונות): ${JSON.stringify(map.journal)}
 שערים: ${JSON.stringify(map.gates)}
 הערות אחרות: ${JSON.stringify(map.other.slice(0, 100))}
 תגיות קיימות: ${JSON.stringify(map.tags)}
 תאריך היום: ${heDate()}
-${await personalContext()}${explicit ? `\nהוראה מפורשת: המשתמש פתח את ההקלטה בשם "${explicit.title}". היעד הוא kind="${explicit.kind}" ו-target="${explicit.title}" — גם אם ההערה קצרה או נראית כבדיקה. הסר את שם המקור מתחילת הטקסט הערוך.\n` : ''}
+${await personalContext()}${explicit ? `\nהוראה מפורשת: המשתמש פתח את ההקלטה בשם "${explicit.title}". היעד הוא kind="${explicit.kind}" ו-target="${explicit.title}" — גם אם ההערה קצרה או נראית כבדיקה. הסר את שם המקור מתחילת הטקסט הערוך.\n` : ''}${isJournal ? '\nהוראה מפורשת: המשתמש פתח במילה "יומן" — kind="journal". הסר את המילה מהטקסט.\n' : ''}
 התמלול:
 """
 ${transcript}
@@ -161,9 +167,10 @@ ${transcript}
   if (!m) throw new Error('Claude לא החזיר תשובה במבנה הצפוי');
   const p = JSON.parse(m[0]);
   if (p.kind === 'idea' && !/לגינה|לגן|לתיקיית הגינה/.test(transcript)) p.kind = 'inbox';
-  if (explicit) { p.kind = explicit.kind; p.target = explicit.title; if (!p.why || /לא ברור/.test(p.why)) p.why = `אמרת "${explicit.title.split(' ')[0]}" בתחילת ההקלטה`; }
+  if (isJournal) p.kind = 'journal';
+  if (explicit && !isJournal) { p.kind = explicit.kind; p.target = explicit.title; if (!p.why || /לא ברור/.test(p.why)) p.why = `אמרת "${explicit.title.split(' ')[0]}" בתחילת ההקלטה`; }
   return {
-    kind: ['source', 'idea', 'course', 'inbox'].includes(p.kind) ? p.kind : 'inbox',
+    kind: ['source', 'idea', 'course', 'inbox', 'journal'].includes(p.kind) ? p.kind : 'inbox',
     target: p.target || '', section: p.section || '', title: p.title || '', text: p.text || transcript,
     tags: Array.isArray(p.tags) ? p.tags : [], newTag: p.newTag || '',
     links: (Array.isArray(p.links) ? p.links : []).map(l => ({ title: l.title, reason: l.reason || '', requested: !!l.requested, accepted: !!l.requested })),
@@ -236,6 +243,7 @@ function destLabel(p) {
   if (p.kind === 'source') return `תוספת ל״${p.target}״${p.section ? ' ← ' + p.section : ''}`;
   if (p.kind === 'course') return `תוספת לקורס ״${p.target}״`;
   if (p.kind === 'idea') return 'הערה חדשה בגינה';
+  if (p.kind === 'journal') return 'רשומה ביומן';
   return 'לתיקיית זמני';
 }
 
@@ -667,6 +675,15 @@ async function approve(d) {
     let c = `---\nסוג: רעיון\nנוצר: ${isoDate(new Date(d.created))}\ntags: [${tags}]\n---\n# ${p.title}\n\n${p.text}\n`;
     if (links.length) c += `\n## קשרים\n${links.map(l => `- [[${l.title}]] — ${l.reason}`).join('\n')}\n`;
     const path = await uniquePath(FOLDERS.idea, safeName(p.title));
+    await writeNote(path, c);
+    return path;
+  }
+  if (p.kind === 'journal') {
+    const links = p.links.filter(l => l.accepted);
+    const tags = p.tags.map(t => `"${t}"`).join(', ');
+    let c = `---\nסוג: יומן\nנוצר: ${isoDate(new Date(d.created))}\ntags: [${tags}]\n---\n# ${p.title}\n\n${p.text}\n`;
+    if (links.length) c += `\n## קשרים\n${links.map(l => `- [[${l.title}]] — ${l.reason}`).join('\n')}\n`;
+    const path = await uniquePath(FOLDERS.journal, safeName(`${isoDate(new Date(d.created))} ${p.title}`));
     await writeNote(path, c);
     return path;
   }
@@ -1142,7 +1159,7 @@ async function renderTzStatus() {
 /* ===================== מסך קריאה ועריכה ===================== */
 function shortDest(e) {
   if (e.kind === 'source' || e.kind === 'course') return e.target + (e.section ? ' ← ' + e.section : '');
-  return e.kind === 'idea' ? 'הגינה' : 'זמני';
+  return e.kind === 'idea' ? 'הגינה' : e.kind === 'journal' ? 'יומן' : 'זמני';
 }
 function whenText(iso) {
   const d = new Date(iso), now = new Date();
@@ -1169,7 +1186,7 @@ async function openNote(e) {
 
 function renderNote() {
   const e = nt.e;
-  const where = e.kind === 'source' ? `${e.target}${e.section ? ' ← ' + e.section : ''}` : e.kind === 'course' ? `קורס: ${e.target}` : e.kind === 'idea' ? 'הגינה' : 'זמני';
+  const where = e.kind === 'source' ? `${e.target}${e.section ? ' ← ' + e.section : ''}` : e.kind === 'course' ? `קורס: ${e.target}` : e.kind === 'idea' ? 'הגינה' : e.kind === 'journal' ? 'יומן' : 'זמני';
   $('note-meta').textContent = `${where} · ${heDate(new Date(e.inserted))}`;
   $('note-title').textContent = e.title || 'הערה';
   $('note-text').textContent = e.text || '';
@@ -1227,11 +1244,12 @@ async function saveNote() {
 }
 
 /* ===================== סקירה שבועית ===================== */
-const KIND_LABEL = { source: 'מקורות', course: 'קורסים', idea: 'הגינה', inbox: 'זמני' };
+const KIND_LABEL = { source: 'מקורות', course: 'קורסים', idea: 'הגינה', inbox: 'זמני', journal: 'יומן' };
 const rv = { entries: [], analysis: null, busy: false };
 
 function weekRange() {
-  const end = new Date(), start = new Date(Date.now() - 6 * 864e5);
+  const oldest = rv.entries.reduce((m, e) => Math.min(m, new Date(e.inserted || e.created).getTime()), Date.now() - 6 * 864e5);
+  const end = new Date(), start = new Date(oldest);
   return `${pad(start.getDate())}.${pad(start.getMonth() + 1)}–${pad(end.getDate())}.${pad(end.getMonth() + 1)}`;
 }
 
@@ -1292,11 +1310,11 @@ async function rewriteEntry(e, changes) {
 
 const REVIEW_PROMPT = `אתה עוזר למשתמש בסקירה שבועית של ההערות שהקליט מאז הסקירה הקודמת (בדרך כלל שבוע, לפעמים יותר) ונכנסו לכספת אובסידיאן שלו (שיטת תיבת הפתקים של זונקה אהרנס).
 קבל את רשימת ההערות של השבוע ואת מפת הכספת, והחזר JSON בלבד:
-{"threads":[{"title":"","ids":[],"why":"","draft":""}],"moves":[{"id":"","kind":"source|course|idea","target":"","section":"","why":""}],"links":[{"id":"","title":"","reason":""}],"summary":""}
+{"threads":[{"title":"","ids":[],"why":"","draft":""}],"moves":[{"id":"","kind":"source|course|idea|journal","target":"","section":"","why":""}],"links":[{"id":"","title":"","reason":""}],"summary":""}
 
-- threads: רעיון שחזר ביותר מהערה אחת השבוע (גם במקורות שונים). title = הרעיון כמשפט קצר. draft = טיוטה קצרה (3–6 משפטים) של הערה עצמאית בלשונו של המשתמש, שמגבשת את החוט — רק ממה שכתוב בהערות, בלי להוסיף תוכן. אם אין חוט אמיתי — מערך ריק. עד 2.
-- moves: רק להערות שנמצאות בזמני (kind=inbox). הצע יעד אם ברור: מקור/קורס קיים מהרשימה (target בדיוק כמו ברשימה), או "idea" לגינה אם זו מחשבה עצמאית ומגובשת. אם לא ברור — אל תציע.
-- links: קישור מהערה של השבוע להערה קיימת בכספת (כותרת מדויקת מהרשימה) שיש ביניהן קשר ממשי. reason = סוג הקשר (מחזק/סותר/מרחיב/מקביל) ומשפט קצר. עד 5 בסך הכול.
+- threads: רעיון שחזר ביותר מהערה אחת השבוע (גם במקורות שונים), או תובנה כללית שהתגבשה בתוך רשומת יומן אחת וראויה להערה עצמאית בגינה (אז ids = אותה רשומה). title = הרעיון כמשפט קצר. draft = טיוטה קצרה (3–6 משפטים) של הערה עצמאית בלשונו של המשתמש, שמגבשת את החוט — רק ממה שכתוב בהערות, בלי להוסיף תוכן. אם אין חוט אמיתי — מערך ריק. עד 2.
+- moves: רק להערות שנמצאות בזמני (kind=inbox). הצע יעד אם ברור: מקור/קורס קיים מהרשימה (target בדיוק כמו ברשימה), "journal" ליומן אם זה הרהור אישי, או "idea" לגינה אם זו מחשבה עצמאית ומגובשת. אם לא ברור — אל תציע. רשומות יומן לא מעבירים.
+- links: קישור מהערה של השבוע להערה קיימת בכספת (כותרת מדויקת מהרשימה, כולל תאריך ברשומות יומן) שיש ביניהן קשר ממשי. ברשומות יומן חפש גם קישור לגינה וגם לרשומות יומן אחרות — גם בין רשומות של השבוע עצמו. reason = סוג הקשר (מחזק/סותר/מרחיב/מקביל/המשך) ומשפט קצר. עד 8 בסך הכול.
 - summary: משפט אחד על מה עסק השבוע.`;
 
 async function analyzeWeek(entries, map) {
@@ -1305,6 +1323,7 @@ async function analyzeWeek(entries, map) {
 מקורות: ${JSON.stringify(map.sources.map(x => x.title))}
 קורסים: ${JSON.stringify(map.courses.map(x => x.title))}
 הגינה: ${JSON.stringify(map.ideas)}
+יומן: ${JSON.stringify(map.journal)}
 שערים: ${JSON.stringify(map.gates)}
 אחרות: ${JSON.stringify(map.other.slice(0, 100))}
 
@@ -1393,10 +1412,10 @@ function reviewCard(e) {
   c.innerHTML = `<div class="rv-dest">${esc(where)} · ${heDate(new Date(e.inserted))}</div>
     <input class="rv-title" value="${esc(e.title)}" aria-label="כותרת">
     <textarea class="rv-text" aria-label="נוסח">${esc(e.text)}</textarea>
-    ${move ? `<div class="rv-suggest"><span>להעביר ל${esc(move.kind === 'idea' ? 'גינה' : move.target + (move.section ? ' ← ' + move.section : ''))}? <span class="rv-why">${esc(move.why || '')}</span></span><button class="sbtn primary mv-acc">העברה</button></div>` : ''}
+    ${move ? `<div class="rv-suggest"><span>להעביר ל${esc(move.kind === 'idea' ? 'גינה' : move.kind === 'journal' ? 'יומן' : move.target + (move.section ? ' ← ' + move.section : ''))}? <span class="rv-why">${esc(move.why || '')}</span></span><button class="sbtn primary mv-acc">העברה</button></div>` : ''}
     ${(links.length || sugg.length) ? `<div class="rv-why">קשרים מוצעים:</div><div class="rv-chips">${[...links, ...sugg].map((l, i) => `<button class="rv-chip" data-i="${i}" title="${esc(l.reason || '')}">+ ${esc(l.title)}</button>`).join('')}</div>` : ''}
     <div class="rv-move hidden">
-      <select class="mv-kind" aria-label="יעד"><option value="inbox">זמני</option><option value="source">מקור</option><option value="course">קורס</option><option value="idea">הגינה</option></select>
+      <select class="mv-kind" aria-label="יעד"><option value="inbox">זמני</option><option value="source">מקור</option><option value="course">קורס</option><option value="idea">הגינה</option><option value="journal">יומן</option></select>
       <input class="mv-target" placeholder="שם הספר / הקורס" list="dest-options">
       <input class="mv-section" placeholder="פרק (לא חובה)">
       <button class="sbtn primary mv-go">העבר לשם</button>

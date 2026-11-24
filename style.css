@@ -238,3 +238,4 @@ input, select, textarea { border: 0; border-radius: 4px; }
 
 #snooze .content { display: flex; flex-direction: column; gap: 10px; }
 .snooze-opts { display: flex; flex-direction: column; gap: 8px; }
+.chip-dest.journal { background: #F3ECF8; color: #4B2A6B; }
