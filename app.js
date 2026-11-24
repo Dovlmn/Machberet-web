@@ -1,5 +1,5 @@
 /* MACHBERET_APP — מחברת: הקלטה, עריכה ב-Claude, מגירה, אישור לכספת */
-const WEB_VERSION = '2026-11-24.2';
+const WEB_VERSION = '2026-11-24.3';
 'use strict';
 
 const Cap = window.capacitorExports || window.Capacitor;
@@ -1369,7 +1369,9 @@ function renderReview() {
     mk.onclick = async () => {
       const text = c.querySelector('textarea').value.trim(); if (!text) return;
       const related = E.filter(e => (t.ids || []).includes(e.id));
-      const links = related.map(e => ({ title: e.kind === 'source' || e.kind === 'course' ? e.target : e.title, reason: 'מקור החוט' }));
+      // קישור לשם הקובץ האמיתי (בזמני השם כולל תאריך), כדי שהקישור באובסידיאן לא ייצא שבור
+      const fileName = (e) => e.path ? e.path.split('/').pop().replace(/\.md$/i, '') : e.title;
+      const links = [...new Map(related.map(e => { const title = e.kind === 'source' || e.kind === 'course' ? e.target : fileName(e); return [title, { title, reason: 'מקור החוט' }]; })).values()];
       const ne = { id: 'thread-' + stamp(), created: new Date().toISOString(), kind: 'idea', title: t.title, text, tags: [], links, transcript: '', why: 'חוט מהסקירה השבועית' };
       try { ne.path = await insertEntry(ne); ne.inserted = new Date().toISOString(); ne.reviewed = true; await updateLogEntry(ne); t.done = true; toast('נוצרה הערה בגינה'); renderReview(); }
       catch (e) { toast('לא הצליח: ' + e.message, 4000); }
